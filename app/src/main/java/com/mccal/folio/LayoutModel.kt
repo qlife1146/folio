@@ -184,12 +184,12 @@ fun homeGeometry(width: Float, height: Float, preset: LayoutPreset, labels: Bool
     val p = preset.sanitized()
     // Unfolded Duo layout only with regular size both ways; the cover in landscape is still compact.
     // Two Duo panels side by side need a window wider than tall. Taller than wide (portrait), iPhone Duo keeps one
-    // centered Home page with the dock as a horizontal bar: the only pose where Apple keeps horizontal bars.
+    // centered Home page. Automatic dock placement keeps the Side Bar in either orientation.
     val regular = fitsRegularHomeLayout(width, height, classScale)
     val tallRegular = regular && height > width
     // Landscape phone screens keep the Side Bar dock: a bottom bar would take too much of a short screen.
     val horizontalDock = when (p.dockPlacement) {
-        DockPlacement.AUTOMATIC -> tallRegular
+        DockPlacement.AUTOMATIC -> false
         DockPlacement.SIDE -> false
         // Short windows (split screen, pop-up windows) keep the Side Bar too, so the page still fits above the bar.
         DockPlacement.BOTTOM -> regular || (height > width && height >= HOME_REGULAR_MIN_HEIGHT_DP)

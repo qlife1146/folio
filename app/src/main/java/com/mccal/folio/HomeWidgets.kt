@@ -222,11 +222,10 @@ internal fun MovableWidget(id: Int, slot: Int, controller: WidgetController, dra
     val context = androidx.compose.ui.platform.LocalContext.current
     val cell = DropTarget.Widget(slot)
     val edit = LocalHomeEdit.current
-    // Built-in cards wiggle; provider widgets (Android views) only get the remove button, since moving
-    // a hosted view every frame would re-lay it out constantly.
+    // Jiggle the drawing layer for every widget, keeping its measured size and drop region stable.
     val cards = WidgetStacks.cards(id, LocalWidgetStacks.current[slot])
     Box(modifier.dropRegion(drag, cell, page = page, widgetId = id)) {
-        val chrome = Modifier.fillMaxSize().then(if (id < 0) Modifier.jiggle("widget-$slot", .35f) else Modifier)
+        val chrome = Modifier.fillMaxSize().jiggle("widget-$slot", .35f)
             .alpha(if (drag.source?.target == cell) .3f else 1f)
             .border(if (drag.active && target == cell) 2.dp else 0.dp,
                 if (drag.active && target == cell) Color.White else Color.Transparent, RoundedCornerShape(FolioRadius.PANEL.dp))

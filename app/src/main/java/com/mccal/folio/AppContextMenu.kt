@@ -44,7 +44,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.graphics.drawable.toBitmap
@@ -79,10 +78,10 @@ internal fun loadQuickActions(context: android.content.Context, app: AppEntry, l
  */
 @Composable
 internal fun AppContextMenu(
-    app: AppEntry, onHome: Boolean, hidden: Boolean,
+    app: AppEntry, onHome: Boolean, fromHome: Boolean, hidden: Boolean,
     /** The Focus locking Home editing, if any: editing rows are replaced by a note. */
     lockedBy: String? = null,
-    onDismiss: () -> Unit, onMove: () -> Unit, onAddOrRemove: () -> Unit, onCreateFolder: () -> Unit, hasFolders: Boolean = false,
+    onDismiss: () -> Unit, onAddOrRemove: () -> Unit,
     onWidgets: (() -> Unit)?, onToggleHidden: () -> Unit, onInfo: () -> Unit, onRename: () -> Unit,
     /** Choose the apps tucked behind this icon (Icon Stacks); null where stacks don't apply. */
     onStack: (() -> Unit)? = null,
@@ -96,7 +95,7 @@ internal fun AppContextMenu(
 
     val actions by produceState(emptyList<QuickAction>(), app.id) { if (!app.isShortcut) value = withContext(Dispatchers.IO) { loadQuickActions(context, app) } }
 
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+    HomeDismissibleDialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         val view = LocalView.current
         LaunchedEffect(view) {
             (view.parent as? DialogWindowProvider)?.window?.let { w ->
@@ -175,8 +174,6 @@ internal fun AppContextMenu(
                         modifier = Modifier.padding(horizontal = FolioSpace.LARGE.dp, vertical = FolioSpace.MEDIUM.dp))
                     MenuDivider()
                 } else {
-                MenuRow(stringResource(R.string.edit_home_screen), Icons.Rounded.AppRegistration) { onMove() }
-                MenuDivider()
                 if ((LocalBadgeCounts.current[app.packageName] ?: 0) > 0 && LocalIconLook.current.badges != BadgeStyle.OFF) {
                     val activity = androidx.activity.compose.LocalActivity.current as? MainActivity
                     MenuRow(stringResource(R.string.clear_badge), Icons.Rounded.NotificationsOff) {
@@ -184,19 +181,19 @@ internal fun AppContextMenu(
                     }
                     MenuDivider()
                 }
-                // A shortcut exists only as this icon, so removing it deletes it (like iOS's "Delete Bookmark").
-                MenuRow(when { app.isShortcut -> stringResource(R.string.delete_shortcut); onHome -> stringResource(R.string.remove_from_home); else -> stringResource(R.string.add_to_home) },
-                    if (onHome || app.isShortcut) Icons.Rounded.RemoveCircleOutline else Icons.Rounded.AddCircleOutline,
-                    destructive = onHome || app.isShortcut) { onAddOrRemove() }
-                MenuDivider()
+                if (fromHome || !onHome) {
+                    // A shortcut exists only as this icon, so removing it deletes it (like iOS's "Delete Bookmark").
+                    MenuRow(when { app.isShortcut -> stringResource(R.string.delete_shortcut); onHome -> stringResource(R.string.remove_from_home); else -> stringResource(R.string.add_to_home) },
+                        if (onHome || app.isShortcut) Icons.Rounded.RemoveCircleOutline else Icons.Rounded.AddCircleOutline,
+                        destructive = onHome || app.isShortcut) { onAddOrRemove() }
+                    MenuDivider()
+                }
                 }
                 // iOS keeps context menus short: the less common actions sit behind "More".
                 if (!more) MenuRow(stringResource(R.string.more), Icons.Rounded.MoreHoriz) { more = true }
                 else {
-                    if (lockedBy == null) MenuRow(if (hasFolders) stringResource(R.string.add_to_folder) else stringResource(R.string.create_folder), Icons.Rounded.CreateNewFolder) { onCreateFolder() }
-                    onWidgets?.let { MenuDivider(); MenuRow(stringResource(R.string.widgets), Icons.Rounded.Widgets) { it() } }
-                    onStack?.let { MenuDivider(); MenuRow(stringResource(R.string.stack_apps), Icons.Rounded.Layers) { it() } }
-                    MenuDivider()
+                    onWidgets?.let { MenuRow(stringResource(R.string.widgets), Icons.Rounded.Widgets) { it() }; MenuDivider() }
+                    onStack?.let { MenuRow(stringResource(R.string.stack_apps), Icons.Rounded.Layers) { it() }; MenuDivider() }
                     MenuRow(stringResource(R.string.rename), Icons.Rounded.DriveFileRenameOutline) { onRename() }
                     MenuDivider()
                     MenuRow(if (hidden) stringResource(R.string.show_in_app_library) else stringResource(R.string.hide_from_app_library), if (hidden) Icons.Rounded.Visibility else Icons.Rounded.VisibilityOff) { onToggleHidden() }

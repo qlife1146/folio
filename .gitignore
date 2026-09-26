@@ -2,6 +2,8 @@
 .kotlin/
 **/build/
 local.properties
+# Local Gradle daemon JVM selection
+/gradle/gradle-daemon-jvm.properties
 .idea/
 *.iml
 .DS_Store

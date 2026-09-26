@@ -33,7 +33,6 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.FormatListBulleted
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.togetherWith
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateIntOffsetAsState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -129,6 +128,7 @@ internal fun ExpandedWorkspace(
     onPinned: (String, Boolean) -> Unit,
     onTurnOnWork: (Long) -> Unit,
     onActions: (AppEntry) -> Unit,
+    onLibraryActions: (AppEntry) -> Unit,
     onWidget: (Int) -> Unit,
     onFolder: (String) -> Unit,
     onEmptyWidget: (Int) -> Unit,
@@ -232,7 +232,8 @@ internal fun ExpandedWorkspace(
             key("library-pane") {
                 Box(Modifier.place((visibleHomePages - 1) * stride + viewportWidth).fillMaxSize()) {
                     AppLibrary(state, libraryQuery, onLibraryQuery, onLaunch, onPinned,
-                        onActions = onActions,
+                        active = nativePager.currentPage == libraryPhysicalPage || nativePager.targetPage == libraryPhysicalPage,
+                        onActions = onLibraryActions,
                         modifier = Modifier.fillMaxSize()
                             .graphicsLayer { val b = libraryBack(); scaleX = 1f - .14f * b; scaleY = scaleX; alpha = 1f - .35f * b; translationX = size.width * .08f * b }
                             .padding(start = FolioSpace.LARGE.dp, top = FolioSpace.LARGE.dp, bottom = bottomSpace)
@@ -293,6 +294,7 @@ internal fun HomePagePane(
     }
     val edit = LocalHomeEdit.current
     val context = LocalContext.current
+    val onBackgroundTap by rememberUpdatedState(LocalHomeBackgroundTap.current)
     val doubleTapAction = FolioAction.entries.firstOrNull { it.name == state.triggerActions[FolioTrigger.DOUBLE_TAP.name] } ?: FolioAction.NONE
     Box(modifier.testTag("home-page-$page")
         // Jiggle mode: a tap on empty space (not on an icon, which handles its own taps) finishes editing.
@@ -301,10 +303,11 @@ internal fun HomePagePane(
             // and a second one opens the Home options.
             val longPress: (Offset) -> Unit = { if (!drag.active) onEmptyWidget(backgroundTarget) }
             when {
-                edit.active -> detectTapGestures(onTap = { edit.stop() }, onLongPress = longPress)
+                edit.active -> detectTapGestures(onTap = { onBackgroundTap(); edit.stop() }, onLongPress = longPress)
                 // Activator-style double-tap on empty Home.
-                doubleTapAction != FolioAction.NONE -> detectTapGestures(onDoubleTap = { FolioActions.run(context, doubleTapAction) }, onLongPress = longPress)
-                else -> detectTapGestures(onLongPress = longPress)
+                doubleTapAction != FolioAction.NONE -> detectTapGestures(onTap = { onBackgroundTap() },
+                    onDoubleTap = { FolioActions.run(context, doubleTapAction) }, onLongPress = longPress)
+                else -> detectTapGestures(onTap = { onBackgroundTap() }, onLongPress = longPress)
             }
         }
         .semantics {
@@ -318,20 +321,13 @@ internal fun HomePagePane(
         .height((contentHeight - bottomSpace).coerceAtLeast(0.dp))) {
         Box(Modifier.width(16.dp).fillMaxHeight().testTag("home-options-margin-$page")
             .pointerInput(backgroundTarget, drag.active) {
-                detectTapGestures(onLongPress = {
+                detectTapGestures(onTap = { onBackgroundTap() }, onLongPress = {
                     if (!drag.active) onEmptyWidget(backgroundTarget)
                 })
             })
-        // Jiggle mode: room under the + / Edit / Done bar so the top row's remove buttons never crowd it.
-        // Frozen while something is held: sliding the grid under a finger would change where it drops.
-        var roomWanted by remember { mutableStateOf(edit.active) }
-        if (!drag.active) roomWanted = edit.active
-        // Only as much room as the Edit bar actually needs above this page's first row; pushing the whole grid down by a
-        // fixed amount cut off the bottom row's labels on screens that already had space at the top.
-        // Unfolded, the bar sits in the space above the widget row, so the grid doesn't move at all (like iPad).
-        val editRoom by animateDpAsState(if (roomWanted && !geometry.expanded) (JIGGLE_BAR_BOTTOM - geometry.contentTop.dp).coerceAtLeast(0.dp) else 0.dp, label = "jiggle room")
+        // The edit controls overlay Home; entering edit mode must not move the grid or its drop targets.
         Column(Modifier.offset(x = 16.dp).width(geometry.gridWidth.dp).fillMaxHeight()
-            .verticalScroll(homeScroll).padding(top = geometry.contentTop.dp + editRoom, bottom = FolioSpace.SMALL.dp)) {
+            .verticalScroll(homeScroll).padding(top = geometry.contentTop.dp, bottom = FolioSpace.SMALL.dp)) {
             val (pageIcon, pageLabels) = (state.pageStyles[page] ?: PageStyle()).apply(geometry, state.labels)
             SharedHomeGrid(page, state.homeSlots, state.leadingSlots, previewSlots, previewLeadingSlots, previewWidgetPlacements,
                 appsById, geometry.copy(iconSize = pageIcon), pageLabels, widgets, drag, target,
@@ -382,6 +378,7 @@ internal fun SharedHomeGrid(
     val rowHeight = geometry.rowHeight
     val iconSize = geometry.iconSize
     val edit = LocalHomeEdit.current
+    val onBackgroundTap = LocalHomeBackgroundTap.current
     val pageStart = homeCellIndex(page, 0)
     val pageRange = pageStart until pageStart + HOME_CELLS
     fun savedAt(index: Int) = if (page == -1) savedLeadingSlots.getOrNull(homeCellLocal(index)) else savedSlots.getOrNull(index)
@@ -391,6 +388,7 @@ internal fun SharedHomeGrid(
     fun previewIndexOf(id: String) = if (page == -1) previewLeadingSlots.indexOf(id).takeIf { it >= 0 }?.let { homeCellIndex(-1, it) }
         else previewSlots.indexOf(id).takeIf { it >= 0 }
     val draggedId = drag.source?.appId
+    val draggedWidgetSlot = (drag.source?.target as? DropTarget.Widget)?.index
     val homeTarget = (target as? DropTarget.Home)?.index
     val source = drag.source?.target as? DropTarget.Home
     // Positions are null when absent: on the unfolded-only page (-1) real indices are negative, so -1 is a real cell.
@@ -435,28 +433,37 @@ internal fun SharedHomeGrid(
             val savedApp = appsById[savedId]
             val savedFolder = folders.firstOrNull { it.id == savedId }
             val previewId = previewAt(globalIndex)
-            val highlighted = drag.active && target == cell
+            val highlighted = drag.active && draggedWidgetSlot == null && (target == cell ||
+                (savedFolder != null && target == DropTarget.Folder(savedFolder.id)))
             val gap = hiddenIndex == globalIndex
             val row = localIndex / GRID_COLUMNS
             val cellHeight = cells.spanHeight(row, 1)
             Box(Modifier.offset(x = cellX(localIndex % GRID_COLUMNS, row), y = rowTop(row).dp)
                 .width(cellWidth).height(cellHeight.dp).testTag("home-cell-$globalIndex")
-                .dropRegion(drag, cell, savedApp?.id ?: savedFolder?.id, page)
+                .dropRegion(drag, cell, savedApp?.id ?: savedFolder?.id, page, iconSizePx = with(density) { iconSize.dp.toPx() })
                 // Keyboard and switch focus goes to the app or folder itself, not the empty cell behind it.
                 .focusProperties { canFocus = false }
-                .combinedClickable(onClick = { if (savedFolder != null) onFolder(savedFolder.id) else if (edit.active) edit.stop() },
+                .combinedClickable(interactionSource = remember { MutableInteractionSource() }, indication = null,
+                    onClick = {
+                        if (savedId == null) onBackgroundTap()
+                        if (savedFolder != null) onFolder(savedFolder.id) else if (edit.active) edit.stop()
+                    },
                     onLongClick = { if (savedId == null && !drag.active) onEmptyWidget(globalIndex) },
                     // Only on an empty cell outside jiggle mode, so a tap on an app or folder isn't held back waiting
                     // for a second one.
-                    onDoubleClick = onEmptyDoubleTap?.takeIf { savedId == null && !edit.active && !drag.active })
-                .background(if (highlighted) Glass.copy(alpha = .25f) else Color.Transparent, RoundedCornerShape(FolioRadius.GROUP.dp))
-                .border(if (highlighted) 2.dp else 0.dp,
-                    if (highlighted) Color.White.copy(alpha = .8f) else Color.Transparent, RoundedCornerShape(FolioRadius.GROUP.dp)),
+                    onDoubleClick = onEmptyDoubleTap?.takeIf { savedId == null && !edit.active && !drag.active }),
                 contentAlignment = Alignment.TopCenter) {
-                if (drag.active && drag.source?.appId != null && (gap || previewId == null)) Box(
-                    Modifier.size(iconSize.dp).testTag(if (gap) "drag-gap-home-$globalIndex" else "empty-home-slot-$globalIndex")
-                        .background(Glass.copy(alpha = if (gap) .16f else .08f), RoundedCornerShape(18.dp))
-                        .border(if (gap) 2.dp else 1.dp, Color.White.copy(alpha = if (gap) .55f else .3f), RoundedCornerShape(18.dp)))
+                // One outline matches the full drop region, including the space around the icon and its label.
+                if (highlighted || (drag.active && drag.source?.appId != null && (gap || previewId == null))) Box(
+                    Modifier.fillMaxSize().testTag(when {
+                        gap -> "drag-gap-home-$globalIndex"
+                        previewId == null -> "empty-home-slot-$globalIndex"
+                        else -> "home-drop-highlight-$globalIndex"
+                    }).background(Glass.copy(alpha = if (highlighted) .25f else if (gap) .16f else .08f),
+                        RoundedCornerShape(FolioRadius.GROUP.dp))
+                        .border(if (highlighted || gap) 2.dp else 1.dp,
+                            Color.White.copy(alpha = if (highlighted) .8f else if (gap) .55f else .3f),
+                            RoundedCornerShape(FolioRadius.GROUP.dp)))
             }
         }
 
@@ -498,9 +505,18 @@ internal fun SharedHomeGrid(
             val row = localIndex / GRID_COLUMNS
             val x = cellX(localIndex % GRID_COLUMNS, row)
             val y = rowTop(row).dp
-            FolderTile(folder, appsById, iconSize, labels, drag, page,
-                Modifier.offset(x = x, y = y).width(cellWidth).height(rowHeight.dp)
-                    .moveActions(folder.id, page, onMove).testTag("home-folder-${folder.id}"), onClick = { onFolder(folder.id) })
+            key(folder.id) {
+                val animatedOffset by animateIntOffsetAsState(
+                    with(density) { IntOffset(x.toPx().roundToInt(), y.toPx().roundToInt()) },
+                    animationSpec = if (drag.active || edit.active) androidx.compose.animation.core.spring(visibilityThreshold = IntOffset(1, 1))
+                        else androidx.compose.animation.core.snap(),
+                    label = "home insertion ${folder.id}",
+                )
+                FolderTile(folder, appsById, iconSize, labels, drag, page,
+                    Modifier.offset { animatedOffset }.width(cellWidth).height(rowHeight.dp)
+                        .graphicsLayer { alpha = if (drag.active && drag.moved && folder.id == draggedId) 0f else 1f }
+                        .moveActions(folder.id, page, onMove).testTag("home-folder-${folder.id}"), onClick = { onFolder(folder.id) })
+            }
         }
         pageWidgets.forEach { placement ->
             key("widget-${placement.slot}") {
@@ -509,6 +525,8 @@ internal fun SharedHomeGrid(
                 val x = cellX(placement.column, row) + 5.dp
                 val y = rowTop(row)
                 val height = (cells.spanHeight(row, placement.spanY) - 18f).coerceAtLeast(48f)
+                val highlightFootprint = drag.active && drag.moved && draggedWidgetSlot == placement.slot && placement.row in 0 until GRID_ROWS &&
+                    homeTarget == homeCellIndex(page, placement.row * GRID_COLUMNS + placement.column)
                 if (placement == pending) Surface(Modifier.offset(x = x, y = y.dp).width(width).height(height.dp)
                     .testTag("widget-pending-${placement.slot}").semantics(mergeDescendants = true) {
                         contentDescription = "Pending ${widgets.pendingProvider?.shortClassName ?: "widget"}"
@@ -520,7 +538,11 @@ internal fun SharedHomeGrid(
                         Spacer(Modifier.height(8.dp)); Text(stringResource(R.string.finish_widget_setup), color = Ink)
                     }
                 } else MovableWidget(placement.id, placement.slot, widgets, drag, target,
-                    Modifier.offset(x = x, y = y.dp).width(width).height(height.dp), page = page) { onWidget(placement.slot) }
+                    Modifier.offset(x = x, y = y.dp).width(width).height(height.dp)
+                        .then(if (highlightFootprint) Modifier
+                            .border(2.dp, Color.White, RoundedCornerShape(FolioRadius.PANEL.dp))
+                            .testTag("widget-drop-highlight-${placement.slot}") else Modifier),
+                    page = page) { onWidget(placement.slot) }
             }
         }
     }

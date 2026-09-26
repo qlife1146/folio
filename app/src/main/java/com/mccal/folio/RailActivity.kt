@@ -48,6 +48,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.layout.Layout
 
+/** Empty Home cells and the surrounding wallpaper share the same dismiss action. */
+internal val LocalHomeBackgroundTap = staticCompositionLocalOf<() -> Unit> { {} }
+
 /**
  * iPhone Duo's side-rail Dynamic Island: a live activity (now playing, a call, a timer, navigation, progress)
  * grows the rail downward under the status, and leaves again when it ends. Tapping Now Playing expands it
@@ -58,16 +61,20 @@ import androidx.compose.ui.layout.Layout
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-internal fun RailLiveActivity(activity: IslandActivity?, width: androidx.compose.ui.unit.Dp) {
+internal fun RailLiveActivity(activity: IslandActivity?, width: androidx.compose.ui.unit.Dp,
+    expanded: Boolean, onExpandedChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    var expanded by remember { mutableStateOf(false) }
+    androidx.activity.compose.BackHandler(expanded) { onExpandedChange(false) }
+    DisposableEffect(Unit) { onDispose { onExpandedChange(false) } }
     // Keep showing the last activity while the rail shrinks away.
     var shown by remember { mutableStateOf(activity) }
     if (activity != null) shown = activity
-    LaunchedEffect(activity == null, activity?.packageName) { if (activity == null || activity !is IslandActivity.Media) expanded = false }
+    LaunchedEffect(activity == null, activity?.packageName) {
+        if (activity == null || activity !is IslandActivity.Media) onExpandedChange(false)
+    }
     val reduceMotion = LocalReduceMotion.current
     val bouncy = androidx.compose.animation.core.spring<androidx.compose.ui.unit.IntSize>(dampingRatio = .72f, stiffness = 420f)
-    AnimatedVisibility(activity != null,
+    AnimatedVisibility(activity != null, modifier = modifier,
         enter = if (reduceMotion) fadeIn() else expandVertically(bouncy, expandFrom = Alignment.Top) + fadeIn(),
         exit = if (reduceMotion) fadeOut() else shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut()) {
         val current = shown ?: return@AnimatedVisibility
@@ -85,7 +92,7 @@ internal fun RailLiveActivity(activity: IslandActivity?, width: androidx.compose
             // Grows and shrinks along the rail with the same spring as the island.
             .animateContentSize(if (reduceMotion) androidx.compose.animation.core.snap() else bouncy)
             .clickable(pressed, null, onClickLabel = if (current is IslandActivity.Media) (if (expanded) "Collapse" else "Expand") else "Open ${current.title}") {
-                if (current is IslandActivity.Media) expanded = !expanded else open()
+                if (current is IslandActivity.Media) onExpandedChange(!expanded) else open()
             }
             .padding(inset).testTag("rail-live-activity")
             .semantics { contentDescription = current.title },

@@ -93,10 +93,11 @@ internal fun IosSlider(value: Float, onValueChange: (Float) -> Unit, valueRange:
 @Composable
 internal fun IosSearchField(query: String, onQuery: (String) -> Unit, placeholder: String, modifier: Modifier = Modifier,
     fieldModifier: Modifier = Modifier, ink: Color = Color.White, onSearch: (() -> Unit)? = null) {
-    // 40 dp at the normal text size, taller only when larger text needs it (A11Y-12). The clear button fills
-    // the height rather than setting it, so it never makes the field grow when it appears.
+    // Measure the content height before the clear button fills it, rather than letting that button
+    // take the parent's full height. Keep at least 40 dp and allow larger text to grow the field (A11Y-12).
     Row(modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(ink.copy(alpha = .12f))
-        .heightIn(min = 40.dp).padding(start = FolioSpace.COMPACT.dp, end = FolioSpace.HAIR.dp), verticalAlignment = Alignment.CenterVertically) {
+        .height(IntrinsicSize.Min).heightIn(min = 40.dp)
+        .padding(start = FolioSpace.COMPACT.dp, end = FolioSpace.HAIR.dp), verticalAlignment = Alignment.CenterVertically) {
         androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Rounded.Search, null, tint = ink.copy(alpha = .55f), modifier = Modifier.size(20.dp))
         Spacer(Modifier.width(8.dp))
         Box(Modifier.weight(1f)) {
@@ -106,7 +107,7 @@ internal fun IosSearchField(query: String, onQuery: (String) -> Unit, placeholde
                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
                 keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { onSearch?.invoke() }))
         }
-        // The row's height is fixed at 40 dp, so this only widens the target: nothing drawn moves (A11Y-1).
+        // Fill only the content-sized row; keep the wider touch target without changing its height (A11Y-1).
         if (query.isNotEmpty()) Box(Modifier.width(FolioTouch.MIN.dp).fillMaxHeight().clip(androidx.compose.foundation.shape.CircleShape).clickable { onQuery("") },
             contentAlignment = Alignment.Center) {
             androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Rounded.Cancel, "Clear search", tint = ink.copy(alpha = .5f), modifier = Modifier.size(20.dp))
@@ -231,12 +232,16 @@ internal fun <T> IosMenuRow(title: String, options: List<Pair<T, String>>, selec
  * the control is already on. Displacing the menu away from its control instead is what caused #117.
  */
 @Composable
-internal fun FolioMenuPopup(expanded: Boolean, onDismiss: () -> Unit, tag: String? = null, content: @Composable ColumnScope.() -> Unit) {
+internal fun FolioMenuPopup(expanded: Boolean, onDismiss: () -> Unit, tag: String? = null, focusable: Boolean = true,
+    content: @Composable ColumnScope.() -> Unit) {
+    val homeVisible = rememberHomePopupVisible(expanded, onDismiss)
+    if (expanded && !homeVisible) return
     androidx.compose.material3.DropdownMenu(expanded, onDismiss,
         modifier = Modifier.widthIn(min = 200.dp, max = 280.dp).then(if (tag != null) Modifier.testTag("$tag-menu") else Modifier),
         shape = RoundedCornerShape(FolioRadius.CARD.dp), containerColor = FolioColors.MenuSurface,
         tonalElevation = 0.dp, shadowElevation = 24.dp,
         border = androidx.compose.foundation.BorderStroke(.5.dp, Color.White.copy(alpha = .12f)),
+        properties = androidx.compose.ui.window.PopupProperties(focusable = focusable),
         content = content)
 }
 

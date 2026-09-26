@@ -54,6 +54,19 @@ fun addAppToFolder(layout: HomeLayout, folderId: String, appId: String, index: I
     return cleared.copy(folders = cleared.folders.map { if (it.id == folderId) it.copy(appIds = members) else it })
 }
 
+/** Apply the picker once, without dissolving the target folder midway through replacing its members. */
+fun setFolderApps(layout: HomeLayout, folderId: String, appIds: List<String>): HomeLayout {
+    if (layout.folder(folderId) == null || appIds.any { it.isBlank() || isReservedFolderId(it) }) return layout
+    val selected = appIds.distinct()
+    val next = selected.fold(layout) { current, appId -> addAppToFolder(current, folderId, appId) }
+    return when (selected.size) {
+        0 -> next.withoutShortcut(folderId).copy(folders = next.folders.filterNot { it.id == folderId })
+        1 -> (next.indexOfShortcut(folderId)?.let { next.withSlot(it, selected.single()) } ?: next)
+            .copy(folders = next.folders.filterNot { it.id == folderId })
+        else -> next.copy(folders = next.folders.map { if (it.id == folderId) it.copy(appIds = selected) else it })
+    }
+}
+
 fun moveFolderApp(layout: HomeLayout, folderId: String, appId: String, index: Int): HomeLayout {
     val folder = layout.folder(folderId) ?: return layout
     val from = folder.appIds.indexOf(appId)

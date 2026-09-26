@@ -83,7 +83,8 @@ internal val LocalGlassLook = androidx.compose.runtime.staticCompositionLocalOf 
 
 /** Settings › Home Screen & Dock › Folders. */
 enum class FolderBackground(@androidx.annotation.StringRes val label: Int) { GLASS(R.string.glass), SOLID(R.string.solid), CLEAR(R.string.clear) }
-internal data class FolderLook(val columns: Int = 0, val background: FolderBackground = FolderBackground.GLASS)
+internal data class FolderLook(val columns: Int = 0, val background: FolderBackground = FolderBackground.GLASS,
+    val backdropOpacity: Float = .42f)
 internal val LocalFolderLook = androidx.compose.runtime.staticCompositionLocalOf { FolderLook() }
 
 /** App name size on Home (Settings › Icons & Side Bar). */

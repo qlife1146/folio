@@ -331,6 +331,8 @@ internal fun CustomizationSheet(state: LauncherState, initiallyWide: Boolean, mo
                     SettingsCard(stringResource(R.string.folders)) {
                         IosMenuRow(stringResource(R.string.columns), listOf(0 to stringResource(R.string.automatic), 3 to "3", 4 to "4"), state.folderColumns, model::setFolderColumns, tag = "folder-columns")
                         IosMenuRow(stringResource(R.string.background), FolderBackground.entries.map { it to stringResource(it.label) }, state.folderBackground, model::setFolderBackground, tag = "folder-background")
+                        CustomizationSlider(stringResource(R.string.folder_backdrop_opacity), "${(state.folderBackdropOpacity * 100).toInt()}%",
+                            state.folderBackdropOpacity, 0f..1f, default = .42f, onChange = model::setFolderBackdropOpacity)
                     }
                     RecentDotsCard(state, model)
                 }
@@ -536,6 +538,8 @@ internal fun CustomizationSheet(state: LauncherState, initiallyWide: Boolean, mo
                                 runCatching { islandContext.startActivity(IslandListenerService.accessSettingsIntent(islandContext)) }
                         }, "island-switch")
                         if (state.island && state.verticalStatus) SettingsSwitch(stringResource(R.string.live_activities_under_the_status_bar), state.railActivities, model::setRailActivities, "rail-activities-switch")
+                        if (state.island) SettingsSwitch(stringResource(R.string.island_in_spotlight), state.islandInSpotlight,
+                            model::setIslandInSpotlight, "island-spotlight-switch")
                         if (state.island && !IslandListenerService.hasAccess(islandContext)) CardAction(stringResource(R.string.allow_notification_access), onClick = {
                             runCatching { islandContext.startActivity(IslandListenerService.accessSettingsIntent(islandContext)) }
                         })
@@ -1313,9 +1317,16 @@ internal fun settingsMatches(query: String, title: String, keywords: String): Bo
         }, "focus-schedule")
         if (schedule != null) {
             val is24 = android.text.format.DateFormat.is24HourFormat(context)
+            val homeDismissal = (androidx.activity.compose.LocalActivity.current as? MainActivity)?.homeDismissal
             fun label(minute: Int) = java.time.LocalTime.of(minute / 60, minute % 60).format(java.time.format.DateTimeFormatter.ofPattern(if (is24) "HH:mm" else "h:mm a"))
-            fun pick(minute: Int, onPicked: (Int) -> Unit) = android.app.TimePickerDialog(context, android.R.style.Theme_DeviceDefault_Dialog_Alert,
-                { _, h, m -> onPicked(h * 60 + m) }, minute / 60, minute % 60, is24).show()
+            fun pick(minute: Int, onPicked: (Int) -> Unit) {
+                val dialog = android.app.TimePickerDialog(context, android.R.style.Theme_DeviceDefault_Dialog_Alert,
+                    { _, h, m -> onPicked(h * 60 + m) }, minute / 60, minute % 60, is24)
+                val dismiss = { dialog.dismiss() }
+                homeDismissal?.register(dismiss)
+                dialog.setOnDismissListener { homeDismissal?.unregister(dismiss) }
+                dialog.show()
+            }
             // The row knows which end it sets by its own key, not by its label, which changes with the language.
             listOf(Triple("from", stringResource(R.string.from), schedule.startMinute),
                 Triple("to", stringResource(R.string.to), schedule.endMinute)).forEach { (key, name, minute) ->
@@ -1663,7 +1674,7 @@ internal fun settingsMatches(query: String, title: String, keywords: String): Bo
         if (!p.statusAlignToGrid) CustomizationSlider(stringResource(R.string.status_height), if (p.statusPosition < .01f) "Top" else "${(p.statusPosition * 100).toInt()}%",
             p.statusPosition, 0f..1f, peek = true) { model.setPreset(wide, p.copy(statusPosition = it)) }
         CardNote(when (p.dockPlacement) {
-            DockPlacement.AUTOMATIC -> if (wide) stringResource(R.string.the_dock_stays_on_the_side_bar_and_moves) else stringResource(R.string.the_dock_stays_on_the_side_bar)
+            DockPlacement.AUTOMATIC -> stringResource(R.string.the_dock_stays_on_the_side_bar_even_when)
             DockPlacement.SIDE -> stringResource(R.string.the_dock_stays_on_the_side_bar_even_when)
             DockPlacement.BOTTOM -> if (wide) stringResource(R.string.the_dock_sits_along_the_bottom_under_you) else stringResource(R.string.the_dock_sits_along_the_bottom_in_landsc)
         } + if (!p.statusAlignToGrid) " The dock always stays below the status." else "")

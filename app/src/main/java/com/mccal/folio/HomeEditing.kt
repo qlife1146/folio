@@ -166,6 +166,73 @@ fun widgetCandidate(layout: HomeLayout, slot: Int, targetIndex: Int, spanX: Int,
     return candidate
 }
 
+private data class DisplacedHomeItem(val index: Int, val appId: String? = null, val widget: WidgetPlacement? = null) {
+    val width get() = widget?.spanX ?: 1
+    val height get() = widget?.spanY ?: 1
+}
+
+/** Keep the incoming footprint fixed, moving collisions into vacancies or forward onto another page. */
+private fun makeHomeRoom(layout: HomeLayout, reserved: Set<Int>, appRows: Int): HomeLayout? {
+    var result = layout
+    val fixed = reserved.toMutableSet()
+    val pending = ArrayDeque<DisplacedHomeItem>()
+    fun displace(cells: Set<Int>) {
+        val widgets = result.widgetPlacements.filter { widget -> widget.coveredIndices().any(cells::contains) }
+        val apps = cells.sorted().mapNotNull { index -> result.slotAt(index)?.let { DisplacedHomeItem(index, appId = it) } }
+        result = result.copy(widgetPlacements = result.widgetPlacements.filterNot { it in widgets })
+        apps.forEach { result = result.withSlot(it.index, null) }
+        // Place larger footprints first so single-cell shortcuts don't fragment the available space.
+        widgets.sortedByDescending { it.spanX * it.spanY }.forEach {
+            pending.addLast(DisplacedHomeItem(homeCellIndex(it.page, it.row * GRID_COLUMNS + it.column), widget = it))
+        }
+        apps.forEach(pending::addLast)
+    }
+    displace(reserved)
+    while (pending.isNotEmpty()) {
+        val item = pending.removeFirst()
+        if (item.width !in 1..GRID_COLUMNS || item.height !in 1..GRID_ROWS) return null
+        val originalPage = homeCellPage(item.index)
+        val originalLocal = homeCellLocal(item.index)
+        fun footprint(page: Int, local: Int): Set<Int>? {
+            val rows = maxOf(item.height, shownHomeRows(appRows, result.slotsForPage(page),
+                result.widgetPlacements.filter { it.page == page }))
+            val row = local / GRID_COLUMNS
+            val column = local % GRID_COLUMNS
+            if (column + item.width > GRID_COLUMNS || row + item.height > rows) return null
+            return buildSet {
+                repeat(item.height) { y -> repeat(item.width) { x ->
+                    add(homeCellIndex(page, (row + y) * GRID_COLUMNS + column + x))
+                } }
+            }.takeIf { cells -> cells.none(fixed::contains) }
+        }
+        val occupied = widgetCells(result)
+        val samePage = ((originalLocal + 1 until HOME_CELLS) + (0..originalLocal)).asSequence()
+            .mapNotNull { local -> footprint(originalPage, local)?.let { local to it } }
+            .firstOrNull { (_, cells) -> cells.none { it in occupied || result.slotAt(it) != null } }
+        var page = originalPage
+        var destination = samePage
+        // A full next page yields its occupants in turn; a missing page is implicitly created by its first item.
+        while (destination == null) {
+            page++
+            destination = (0 until HOME_CELLS).asSequence()
+                .mapNotNull { local -> footprint(page, local)?.let { local to it } }.firstOrNull()
+        }
+        val (local, cells) = destination
+        fixed += cells
+        displace(cells)
+        result = if (item.widget != null) result.copy(widgetPlacements = result.widgetPlacements +
+            item.widget.copy(page = page, column = local % GRID_COLUMNS, row = local / GRID_COLUMNS))
+        else result.withSlot(homeCellIndex(page, local), item.appId)
+    }
+    return result.copy(widgetPlacements = result.widgetPlacements.sortedBy { it.slot })
+}
+
+private fun dropAppWithRoom(layout: HomeLayout, id: String, index: Int, appRows: Int): HomeLayout {
+    val without = layout.copy(slots = layout.slots.map { it?.takeUnless(id::equals) },
+        leadingSlots = layout.leadingSlots.map { it?.takeUnless(id::equals) }, dock = layout.dock.map { it?.takeUnless(id::equals) })
+    return makeHomeRoom(without, setOf(index), appRows)?.withSlot(index, id) ?: layout
+}
+
 /**
  * Moves use insertion order and transfer shortcuts between Home and the dock. Apps pushed along skip cells in rows a page
  * doesn't show with [appRows] app rows (the dragged app's own cell and the target are always usable: they're on screen).
@@ -176,7 +243,8 @@ fun dropApp(layout: HomeLayout, id: String, target: DropTarget, appRows: Int = M
         is DropTarget.Home -> {
             val blocked = widgetCells(layout)
             val targetPage = homeCellPage(target.index)
-            if (targetPage !in -1..layout.pageCount || target.index in blocked) return layout
+            if (targetPage !in -1..layout.pageCount) return layout
+            if (target.index in blocked) return dropAppWithRoom(layout, id, target.index, appRows)
             if (targetPage == -1) {
                 val cells = normalizedLeadingSlots(layout.leadingSlots).toMutableList()
                 val targetLocal = homeCellLocal(target.index)
@@ -203,7 +271,7 @@ fun dropApp(layout: HomeLayout, id: String, target: DropTarget, appRows: Int = M
                 } else if (cells[targetLocal] == null) cells[targetLocal] = id else {
                     val later = (targetLocal + 1 until HOME_CELLS).firstOrNull { it !in blockedLocal && cells[it] == null }
                     val earlier = (targetLocal - 1 downTo 0).firstOrNull { it !in blockedLocal && cells[it] == null }
-                    val vacancy = later ?: earlier ?: return layout
+                    val vacancy = later ?: earlier ?: return dropAppWithRoom(layout, id, target.index, appRows)
                     val usable = (minOf(vacancy, targetLocal)..maxOf(vacancy, targetLocal)).filterNot { it in blockedLocal }
                     if (vacancy > targetLocal) for (position in usable.lastIndex downTo 1) cells[usable[position]] = cells[usable[position - 1]]
                     else for (position in 0 until usable.lastIndex) cells[usable[position]] = cells[usable[position + 1]]
@@ -215,14 +283,16 @@ fun dropApp(layout: HomeLayout, id: String, target: DropTarget, appRows: Int = M
             }
             val slots = layout.slots.toMutableList()
             val source = slots.indexOf(id)
+            val sourceOnPage = source >= 0 && homeCellPage(source) == targetPage
             fun unusable(index: Int) = index in blocked || (index != source && index != target.index && !homeCellShown(index, appRows))
             slots.indices.filter { it != source && slots[it] == id }.forEach { slots[it] = null }
+            if (source >= 0 && !sourceOnPage) slots[source] = null
             while (slots.size <= target.index) slots.add(null)
             val occupied = slots[target.index] != null
             when {
                 source == target.index -> Unit
                 source >= 0 && !occupied -> { slots[source] = null; slots[target.index] = id }
-                source >= 0 -> {
+                sourceOnPage -> {
                     val usable = (minOf(source, target.index)..maxOf(source, target.index)).filterNot(::unusable)
                     val from = usable.indexOf(source)
                     val to = usable.indexOf(target.index)
@@ -233,13 +303,18 @@ fun dropApp(layout: HomeLayout, id: String, target: DropTarget, appRows: Int = M
                 }
                 else -> {
                     if (!occupied) slots[target.index] = id else {
-                        var vacancy = target.index + 1
+                        val pageStart = targetPage * HOME_CELLS
+                        val pageEnd = pageStart + HOME_CELLS
+                        val later = (target.index + 1 until pageEnd).firstOrNull { !unusable(it) && slots.getOrNull(it) == null }
+                        val earlier = (target.index - 1 downTo pageStart).firstOrNull { !unusable(it) && slots.getOrNull(it) == null }
+                        var vacancy = later ?: earlier ?: pageEnd
                         val limit = HOME_CELLS * (layout.pageCount + 1)
                         while (vacancy < limit && (unusable(vacancy) || slots.getOrNull(vacancy) != null)) vacancy++
                         if (vacancy >= limit) return layout
                         while (slots.size <= vacancy) slots.add(null)
-                        val usable = (target.index..vacancy).filterNot(::unusable)
-                        for (position in usable.lastIndex downTo 1) slots[usable[position]] = slots[usable[position - 1]]
+                        val usable = (minOf(target.index, vacancy)..maxOf(target.index, vacancy)).filterNot(::unusable)
+                        if (vacancy > target.index) for (position in usable.lastIndex downTo 1) slots[usable[position]] = slots[usable[position - 1]]
+                        else for (position in 0 until usable.lastIndex) slots[usable[position]] = slots[usable[position + 1]]
                         slots[target.index] = id
                     }
                 }
@@ -300,13 +375,18 @@ fun replaceWidgetAtSameFootprint(layout: HomeLayout, placement: WidgetPlacement)
             else layout.widgetRestores.filterNot { it.slot == placement.slot })
 }
 
-fun moveWidget(layout: HomeLayout, slot: Int, index: Int): HomeLayout {
+fun moveWidget(layout: HomeLayout, slot: Int, index: Int, appRows: Int = MAX_APP_ROWS): HomeLayout {
     val old = layout.placement(slot) ?: return layout
     val page = homeCellPage(index)
     if (page !in -1..layout.pageCount) return layout
     val local = homeCellLocal(index)
-    return placeWidget(layout, old.copy(page = page, column = local % GRID_COLUMNS,
-        row = local / GRID_COLUMNS, spanY = old.spanY.coerceAtMost(GRID_ROWS)))
+    val moved = old.copy(page = page, column = local % GRID_COLUMNS, row = local / GRID_COLUMNS)
+    if (!moved.valid() || moved.row + moved.spanY > maxOf(old.spanY,
+            shownHomeRows(appRows, layout.slotsForPage(page), layout.widgetPlacements.filter { it.page == page }))) return layout
+    if (moved == old) return layout
+    val without = layout.copy(widgetPlacements = layout.widgetPlacements.filterNot { it.slot == slot })
+    val rearranged = makeHomeRoom(without, moved.coveredIndices(), appRows) ?: return layout
+    return rearranged.copy(widgetPlacements = (rearranged.widgetPlacements + moved).sortedBy { it.slot })
 }
 
 fun resizeWidget(layout: HomeLayout, slot: Int, spanX: Int, spanY: Int): HomeLayout {

@@ -48,6 +48,12 @@ class MainActivity : ComponentActivity() {
     internal lateinit var backgrounds: LauncherBackgroundController
         private set
     private val homeRequests = mutableIntStateOf(0)
+    internal val homeDismissal = HomeDismissal()
+    private val homeButtonReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.getStringExtra("reason") == "homekey") returnHome()
+        }
+    }
     private val searchRequests = mutableIntStateOf(0)
     /** Opened from Android Settings (Home app gear / "Additional settings in the app"). */
     private val settingsRequests = mutableIntStateOf(0)
@@ -96,6 +102,9 @@ class MainActivity : ComponentActivity() {
         // USER_PRESENT is a protected system broadcast delivered to runtime receivers.
         androidx.core.content.ContextCompat.registerReceiver(this, unlockReceiver, android.content.IntentFilter(Intent.ACTION_USER_PRESENT),
             androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+        // Receive the system's Home notification even when a dialog owns focus. Never send it.
+        ContextCompat.registerReceiver(this, homeButtonReceiver,
+            IntentFilter("android.intent.action.CLOSE_SYSTEM_DIALOGS"), ContextCompat.RECEIVER_NOT_EXPORTED)
         showFirstRun.value = setupExperience.entryDecision(SetupExperience.hadLauncherState(this)) ==
             SetupEntryDecision.SHOW
         showWhatsNew.value = savedInstanceState == null && WhatsNew.shouldShow(this, firstRun = showFirstRun.value)
@@ -241,7 +250,7 @@ class MainActivity : ComponentActivity() {
                 LocalWallpaperTone provides wallpaperTone,
                 LocalGlassLook provides GlassLook(state.widgetGlass, state.glassOutline),
                 LocalSolidGlass provides solidGlass,
-                LocalFolderLook provides FolderLook(state.folderColumns, state.folderBackground),
+                LocalFolderLook provides FolderLook(state.folderColumns, state.folderBackground, state.folderBackdropOpacity),
                 LocalLabelSize provides state.labelSize,
                 LocalReduceMotion provides reduceMotion,
                 LocalHinge provides rememberHinge(this@MainActivity),
@@ -304,7 +313,7 @@ class MainActivity : ComponentActivity() {
                 }
                 if (showWhatsNew.value || whatsNewRequested.value) WhatsNewSheet { showWhatsNew.value = false; whatsNewRequested.value = false; WhatsNew.markSeen(this@MainActivity) }
                 // With live activities in the side rail, the camera island on Home keeps only its brief events.
-                if (state.island) CutoutIsland(IslandListenerService.activity.collectAsStateWithLifecycle().value
+                if (state.island && (!spotlightVisible.value || state.islandInSpotlight)) CutoutIsland(IslandListenerService.activity.collectAsStateWithLifecycle().value
                     ?.takeUnless { it is IslandActivity.Call && "CALL" in state.islandEventsOff }
                     ?.takeUnless { state.railActivities && state.verticalStatus && !overlayOpen }, state.islandEventsOff + "BLUETOOTH") {
                     IslandListenerService.open(this@MainActivity, it)
@@ -345,6 +354,7 @@ class MainActivity : ComponentActivity() {
     }
     override fun onDestroy() {
         runCatching { unregisterReceiver(unlockReceiver) }
+        runCatching { unregisterReceiver(homeButtonReceiver) }
         recreatingShadeSetup = isChangingConfigurations
         shadeSetupDialog?.dismiss()
         if (!isChangingConfigurations) releaseShadeSetupOwnership()
@@ -411,7 +421,18 @@ class MainActivity : ComponentActivity() {
      * The Home button is the way out of anything. Setup is shown again next time (or from Settings › Help › Show Welcome
      * Again), so an overlay can never leave Home stuck behind it with no way back.
      */
-    private fun closeEverything() { closeOverlays(); showFirstRun.value = false; lockCoverVisible.value = false }
+    private fun closeEverything() {
+        homeDismissal.dismissAll()
+        shadeSetupDialog?.dismiss()
+        closeOverlays()
+        showFirstRun.value = false; lockCoverVisible.value = false
+        showWhatsNew.value = false; whatsNewRequested.value = false; sharedTheme.value = null
+    }
+
+    private fun returnHome() {
+        closeEverything()
+        homeRequests.intValue++
+    }
 
     internal fun openSystemShade(panel: ShadePanel) {
         if (model.state.value.folioPanels) topPanel.value = panel else openAndroidShade(panel)
@@ -526,7 +547,7 @@ class MainActivity : ComponentActivity() {
         if (opensSettings(intent)) { SoftwareUpdate.openRequested = intent.getBooleanExtra(SoftwareUpdate.EXTRA_OPEN_UPDATE, false); settingsRequests.intValue++ }
         else if (takeMarketLink(intent)) settingsRequests.intValue++
         else if (intent.hasCategory(Intent.CATEGORY_HOME) || fromAppIcon(intent) || intent.getStringExtra("duo_destination") == "home") {
-            closeEverything(); homeRequests.intValue++
+            returnHome()
         }
         intent.removeExtra("duo_destination")
     }

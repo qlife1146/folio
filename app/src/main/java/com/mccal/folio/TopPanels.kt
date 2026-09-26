@@ -368,7 +368,7 @@ private fun NotificationOptions(item: NotificationItem, bounds: android.graphics
     val appear = remember { androidx.compose.animation.core.Animatable(0f) }
     LaunchedEffect(Unit) { appear.animateTo(1f, spring(dampingRatio = .75f, stiffness = Spring.StiffnessMediumLow)) }
     fun act(action: () -> Unit) { onDismiss(); action() }
-    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss,
+    HomeDismissibleDialog(onDismissRequest = onDismiss,
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         val view = androidx.compose.ui.platform.LocalView.current
         LaunchedEffect(view) {

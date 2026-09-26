@@ -19,6 +19,11 @@
     <string name="spotlight">Spotlight</string>
     <string name="duckduckgo">DuckDuckGo</string>
     <string name="done">Done</string>
+    <string name="folder_select_apps">Select folder apps</string>
+    <string name="folder_backdrop_opacity">Backdrop opacity</string>
+    <string name="folder_confirm_apps">Confirm</string>
+    <string name="folder_selected_order">Selected apps · Folder order</string>
+    <string name="folder_no_selected_apps">No apps selected</string>
     <string name="set_as_home_app">Set as home app</string>
     <string name="undo_last_layout_change">Undo last layout change</string>
     <string name="background">Background</string>
@@ -88,6 +93,7 @@
     <string name="uses_folios_accessibility_service_the_sa">Uses Folio’s accessibility service (the same one as shade gestures). Tap or drag the handle to open your dock. If the handle fights the back gesture, lower the right-edge back sensitivity.</string>
     <string name="island">Island</string>
     <string name="music_and_live_progress">Music and live progress</string>
+    <string name="island_in_spotlight">Show in Spotlight</string>
     <string name="allow_notification_access">Allow notification access</string>
     <string name="long_press_and_drag_the_island_to_move_i">Long-press and drag the island to move it. On the inner screen the camera sits under the display, so drag it onto the camera once.</string>
     <string name="put_the_island_back_at_the_camera">Put the island back at the camera</string>

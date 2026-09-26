@@ -7,6 +7,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.AwaitPointerEventScope
 import androidx.compose.ui.input.pointer.PointerInputChange
@@ -15,8 +16,14 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 
 internal data class DragRegion(val target: DropTarget, val bounds: Rect, val appId: String?, val page: Int?,
-    val widgetId: Int? = null, val folderId: String? = null, val scope: String? = null) {
+    val widgetId: Int? = null, val folderId: String? = null, val scope: String? = null, val iconSizePx: Float? = null,
+    val contentBounds: Rect = bounds) {
     val movable get() = appId != null || (widgetId != null && widgetId != EMPTY_WIDGET)
+    fun containsIcon(point: Offset): Boolean {
+        val size = iconSizePx?.coerceAtMost(minOf(bounds.width, bounds.height)) ?: return false
+        val left = bounds.center.x - size / 2f
+        return Rect(left, bounds.top, left + size, bounds.top + size).contains(point)
+    }
 }
 
 @Stable
@@ -31,13 +38,38 @@ internal class HomeDragState {
     var originPage = 0
     var moved by mutableStateOf(false)
     var activeSourceScope by mutableStateOf<String?>(null)
+    var folderMenuAppId by mutableStateOf<String?>(null)
+    var folderBounds by mutableStateOf<Rect?>(null)
+    var folderExited by mutableStateOf(false)
+    var folderDragRegions by mutableStateOf<List<DragRegion>>(emptyList())
+    val reorderingFolder get() = source?.folderId != null && !folderExited
     val active get() = source != null
     fun hit(point: Offset, pages: Set<Int>) = regions.values
         .filter { (it.page == null || it.page in pages) && it.bounds.contains(point) &&
             (source != null || it.target !is DropTarget.Folder) && it.scope == activeSourceScope }
         .maxByOrNull(::dragRegionPriority)
     fun destination(point: Offset, pages: Set<Int>): DragRegion? {
+        if (reorderingFolder) {
+            // Gaps and unused space still belong to the folder, never to the Home cells behind it.
+            // Preview icons move between cells; keep targeting the original cells to avoid oscillating order.
+            val children = folderDragRegions
+            return children.firstOrNull { it.bounds.contains(point) }
+                ?: children.minByOrNull { (it.bounds.center - point).getDistance() }
+        }
         regions[DropTarget.Remove]?.takeIf { source?.target !is DropTarget.Library && it.bounds.contains(point) }?.let { return it }
+        // Resolve against saved Home cells, not icons moving in the insertion preview. The icon area
+        // accepts apps into a folder; the surrounding gap inserts and shifts neighboring shortcuts.
+        val draggedApp = source?.appId
+        if (draggedApp != null && !isReservedFolderId(draggedApp)) {
+            regions.values.firstOrNull {
+                it.target is DropTarget.Home && (it.page == null || it.page in pages) && it.bounds.contains(point)
+            }?.let { cell ->
+                val folderId = cell.appId?.takeIf(::isFolderId)
+                return if (folderId != null && folderId != source?.folderId && cell.containsIcon(point))
+                    cell.copy(target = DropTarget.Folder(folderId), folderId = folderId)
+                else cell
+            }
+        }
         return regions.values.filter {
             (it.page == null || it.page in pages) && it.bounds.contains(point) && when (it.target) {
                 // A moving widget is rendered at its preview footprint and registers the
@@ -48,23 +80,35 @@ internal class HomeDragState {
                 is DropTarget.Dock -> source?.appId != null
                 // A dragged folder is drawn under the finger with its own drop target, and folders don't nest,
                 // so a folder only ever lands on Home cells (and apps never on the folder they're leaving).
-                is DropTarget.Folder -> source?.appId?.let { !isFolderId(it) } == true && source?.target !is DropTarget.Folder
+                is DropTarget.Folder -> source?.appId?.let { !isReservedFolderId(it) } == true &&
+                    source?.target !is DropTarget.Folder && source?.folderId != it.folderId
                 DropTarget.Remove -> source?.target !is DropTarget.Library
                 is DropTarget.Library -> false
             }
         }.maxByOrNull(::dragRegionPriority)
     }
-    fun clear() { source = null; moved = false }
+    fun clear() { source = null; moved = false; folderExited = false; folderDragRegions = emptyList() }
+
+    /** Overlapping an icon makes a folder; the space between icons previews a reorder. */
+    fun folderCreationTarget(point: Offset, pages: Set<Int>, layout: HomeLayout): DropTarget.Home? {
+        val from = source ?: return null
+        if (from.target !is DropTarget.Home || from.appId == null || isReservedFolderId(from.appId)) return null
+        val region = destination(point, pages) ?: return null
+        val target = region.target as? DropTarget.Home ?: return null
+        val other = layout.slotAt(target.index) ?: return null
+        if (other == from.appId || isReservedFolderId(other)) return null
+        return target.takeIf { region.containsIcon(point) }
+    }
 
     fun register(owner: Any, region: DragRegion) {
         regionOwners[region.target] = owner
         regions[region.target] = region
     }
 
-    fun update(owner: Any, target: DropTarget, appId: String?, page: Int?, widgetId: Int?, folderId: String?, scope: String?) {
+    fun update(owner: Any, target: DropTarget, appId: String?, page: Int?, widgetId: Int?, folderId: String?, scope: String?, iconSizePx: Float? = null) {
         regions[target]?.takeIf { regionOwners[target] === owner }?.let {
-            if (it.appId != appId || it.widgetId != widgetId || it.page != page || it.folderId != folderId || it.scope != scope) {
-                regions[target] = it.copy(appId = appId, widgetId = widgetId, page = page, folderId = folderId, scope = scope)
+            if (it.appId != appId || it.widgetId != widgetId || it.page != page || it.folderId != folderId || it.scope != scope || it.iconSizePx != iconSizePx) {
+                regions[target] = it.copy(appId = appId, widgetId = widgetId, page = page, folderId = folderId, scope = scope, iconSizePx = iconSizePx)
             }
         }
     }
@@ -87,12 +131,15 @@ internal fun dragEdgeDirection(point: Offset, window: Rect, edgeWidth: Float): I
 
 @Composable
 internal fun Modifier.dropRegion(drag: HomeDragState, target: DropTarget, appId: String? = null, page: Int? = null,
-    widgetId: Int? = null, folderId: String? = null, scope: String? = null): Modifier {
+    widgetId: Int? = null, folderId: String? = null, scope: String? = null, iconSizePx: Float? = null): Modifier {
     val owner = remember { Any() }
     DisposableEffect(drag, target, owner) { onDispose { drag.unregister(owner, target) } }
-    SideEffect { drag.update(owner, target, appId, page, widgetId, folderId, scope) }
+    SideEffect { drag.update(owner, target, appId, page, widgetId, folderId, scope, iconSizePx) }
     return onGloballyPositioned { coordinates ->
-        drag.register(owner, DragRegion(target, coordinates.boundsInRoot(), appId, page, widgetId, folderId, scope))
+        // Hit testing uses visible bounds; the drag preview must retain the full widget size even when scrolled.
+        val contentBounds = Rect(coordinates.localToRoot(Offset.Zero),
+            Size(coordinates.size.width.toFloat(), coordinates.size.height.toFloat()))
+        drag.register(owner, DragRegion(target, coordinates.boundsInRoot(), appId, page, widgetId, folderId, scope, iconSizePx, contentBounds))
     }
 }
 
@@ -154,12 +201,14 @@ internal fun Modifier.homeDragInput(
     onStart: () -> Unit, onFinish: (Boolean) -> Unit,
     /** Jiggle mode: moving a finger past touch slop picks the item up without a long-press. */
     immediate: Boolean = false,
+    onMoveStart: () -> Unit = {},
 ): Modifier {
     val currentImmediate by rememberUpdatedState(immediate)
     val currentEnabled by rememberUpdatedState(enabled)
     val currentPage by rememberUpdatedState(page)
     val currentEligiblePages by rememberUpdatedState(eligiblePages)
     val start by rememberUpdatedState(onStart)
+    val moveStart by rememberUpdatedState(onMoveStart)
     val finish by rememberUpdatedState(onFinish)
     return onGloballyPositioned { drag.rootBounds = it.boundsInRoot() }.pointerInput(drag) {
         awaitEachGesture {
@@ -177,11 +226,16 @@ internal fun Modifier.homeDragInput(
                 awaitLongPressOrCancellation(down.id) ?: return@awaitEachGesture
             }
             drag.source = region
+            drag.folderExited = false
+            drag.folderDragRegions = if (region.folderId != null) drag.regions.values.filter {
+                it.scope == region.folderId && it.target is DropTarget.Library
+            } else emptyList()
             drag.pointer = point
             drag.origin = point
             drag.originPage = currentPage
             drag.moved = movedAlready
             start()
+            if (movedAlready) moveStart()
             try {
                 while (true) {
                     val event = awaitPointerEvent(PointerEventPass.Initial)
@@ -192,7 +246,13 @@ internal fun Modifier.homeDragInput(
                         break
                     }
                     drag.pointer = change.position + drag.rootOrigin
-                    if ((drag.pointer - drag.origin).getDistance() > viewConfiguration.touchSlop) drag.moved = true
+                    if (!drag.moved && (drag.pointer - drag.origin).getDistance() > viewConfiguration.touchSlop) {
+                        drag.moved = true
+                        moveStart()
+                    }
+                    if (drag.moved && drag.reorderingFolder && drag.folderBounds?.contains(drag.pointer) == false) {
+                        drag.folderExited = true
+                    }
                     change.consume()
                     if (!change.pressed) {
                         finish(false)

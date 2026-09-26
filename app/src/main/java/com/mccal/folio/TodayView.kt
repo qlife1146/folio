@@ -41,9 +41,11 @@ import java.time.format.DateTimeFormatter
 @Composable
 internal fun TodayView(state: LauncherState, widgets: WidgetController, modifier: Modifier = Modifier,
     onSearch: () -> Unit, onLaunch: (AppEntry) -> Unit, onAddWidget: () -> Unit,
-    onRemove: (Int) -> Unit, onMove: (Int, Int) -> Unit) {
+    onRemove: (Int) -> Unit, onMove: (Int, Int) -> Unit,
+    active: Boolean = true, homeRequests: Int = 0) {
     val context = LocalContext.current
     val edit = remember { HomeEditMode() }
+    LaunchedEffect(active, homeRequests) { edit.stop() }
     androidx.activity.compose.BackHandler(edit.active) { edit.stop() }
     val tick by rememberMinuteTick()
     val today = remember(tick) { LocalDate.now() }
@@ -79,7 +81,7 @@ internal fun TodayView(state: LauncherState, widgets: WidgetController, modifier
                         Text(today.format(DateTimeFormatter.ofPattern("MMMM d")), color = LocalHomeInk.current.primary, fontSize = if (wide) 40.sp else 34.sp,
                             fontWeight = FontWeight.Bold)
                     }
-                    if (suggestions.isNotEmpty() && !edit.active) TodaySuggestions(suggestions, 4, onLaunch)
+                    if (suggestions.isNotEmpty()) TodaySuggestions(suggestions, 4, onLaunch, editing = edit.active)
 
                     // Widget grid, packed two columns at a time.
                     todayRows(state.todayWidgets).forEach { row ->
@@ -123,7 +125,7 @@ internal fun todayRows(list: List<TodayWidget>): List<List<TodayWidget>> {
 }
 
 @Composable
-private fun TodaySuggestions(apps: List<AppEntry>, columns: Int, onLaunch: (AppEntry) -> Unit) {
+private fun TodaySuggestions(apps: List<AppEntry>, columns: Int, onLaunch: (AppEntry) -> Unit, editing: Boolean = false) {
     val ink = LocalHomeInk.current
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Color.White.copy(alpha = if (ink.dark) .45f else .14f))
         .border(FolioGlass.edge, RoundedCornerShape(22.dp)).padding(horizontal = FolioSpace.COMPACT.dp, vertical = FolioSpace.MEDIUM.dp)) {
@@ -131,11 +133,17 @@ private fun TodaySuggestions(apps: List<AppEntry>, columns: Int, onLaunch: (AppE
             modifier = Modifier.padding(start = FolioSpace.SNUG.dp, bottom = FolioSpace.SMALL.dp))
         Row(Modifier.fillMaxWidth()) {
             apps.take(columns).forEach { app ->
-                Column(Modifier.weight(1f).clip(RoundedCornerShape(FolioRadius.CARD.dp)).clickable { onLaunch(app) }.padding(vertical = FolioSpace.TINY.dp),
+                Column(Modifier.weight(1f).clip(RoundedCornerShape(FolioRadius.CARD.dp))
+                    .then(if (editing) Modifier else Modifier.clickable { onLaunch(app) }).padding(vertical = FolioSpace.TINY.dp),
                     horizontalAlignment = Alignment.CenterHorizontally) {
-                    AppIcon(app, app.label, Modifier.size(52.dp), shape = RoundedCornerShape(13.dp), badge = false)
-                    Text(app.label, color = ink.primary, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = FolioSpace.TINY.dp, start = FolioSpace.HAIR.dp, end = FolioSpace.HAIR.dp))
+                    if (editing) Box(Modifier.size(52.dp).background(ink.primary.copy(alpha = .12f), RoundedCornerShape(13.dp)))
+                    else AppIcon(app, app.label, Modifier.size(52.dp), shape = RoundedCornerShape(13.dp), badge = false)
+                    Box(Modifier.fillMaxWidth().padding(top = FolioSpace.TINY.dp, start = FolioSpace.HAIR.dp, end = FolioSpace.HAIR.dp),
+                        contentAlignment = Alignment.Center) {
+                        Text(if (editing) " " else app.label, color = ink.primary, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (editing) Box(Modifier.width(32.dp).height(6.dp)
+                            .background(ink.primary.copy(alpha = .12f), RoundedCornerShape(3.dp)))
+                    }
                 }
             }
             repeat((columns - apps.size).coerceAtLeast(0)) { Spacer(Modifier.weight(1f)) }

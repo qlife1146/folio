@@ -19,6 +19,11 @@
     <string name="spotlight">Spotlight</string>
     <string name="duckduckgo">DuckDuckGo</string>
     <string name="done">완료</string>
+    <string name="folder_select_apps">폴더 앱 선택</string>
+    <string name="folder_backdrop_opacity">뒷배경 불투명도</string>
+    <string name="folder_confirm_apps">확인</string>
+    <string name="folder_selected_order">선택한 앱 · 폴더 순서</string>
+    <string name="folder_no_selected_apps">선택한 앱이 없습니다</string>
     <string name="set_as_home_app">홈 앱으로 설정</string>
     <string name="undo_last_layout_change">마지막 레이아웃 변경 실행 취소</string>
     <string name="background">배경</string>
@@ -88,6 +93,7 @@
     <string name="uses_folios_accessibility_service_the_sa">알림창 제스처와 동일한 Folio 접근성 서비스를 사용합니다. 핸들을 탭하거나 드래그하여 Dock을 여세요. 핸들과 뒤로 가기 제스처가 충돌하면 오른쪽 가장자리의 뒤로 가기 민감도를 낮추세요.</string>
     <string name="island">Dynamic Island</string>
     <string name="music_and_live_progress">음악 및 실시간 진행 상태</string>
+    <string name="island_in_spotlight">Spotlight에서 표시</string>
     <string name="allow_notification_access">알림 접근 허용</string>
     <string name="long_press_and_drag_the_island_to_move_i">Dynamic Island를 길게 누른 채 드래그하여 이동하세요. 내부 화면의 카메라는 디스플레이 아래에 있으므로 처음에 한 번 카메라 위치로 드래그하세요.</string>
     <string name="put_the_island_back_at_the_camera">Dynamic Island를 카메라 위치로 되돌리기</string>

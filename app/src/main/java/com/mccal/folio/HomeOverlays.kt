@@ -26,9 +26,17 @@ internal class HomeOverlays(
     folder: String? = null,
     newFolder: String? = null,
     emptyCell: Int? = null,
+    menuFromHome: Boolean = false,
 ) {
     /** The icon whose context menu is showing. */
     var menu by mutableStateOf(menu)
+    var menuFromHome by mutableStateOf(menuFromHome)
+        private set
+
+    fun openAppMenu(id: String?, fromHome: Boolean) {
+        menuFromHome = fromHome
+        menu = id
+    }
 
     /** The app being given a name of your own. */
     var rename by mutableStateOf(rename)
@@ -47,12 +55,18 @@ internal class HomeOverlays(
     /** The empty Home cell whose menu is open. */
     var emptyCell by mutableStateOf(emptyCell)
 
+    fun dismissAll() {
+        menuFromHome = false
+        menu = null; rename = null; panel = null; stackFan = null; stackEditor = null
+        folder = null; newFolder = null; emptyCell = null
+    }
+
     companion object {
         val Saver = listSaver<HomeOverlays, Any?>(
-            save = { listOf(it.menu, it.rename, it.panel, it.stackFan, it.stackEditor, it.folder, it.newFolder, it.emptyCell) },
+            save = { listOf(it.menu, it.rename, it.panel, it.stackFan, it.stackEditor, it.folder, it.newFolder, it.emptyCell, it.menuFromHome) },
             restore = {
                 HomeOverlays(it[0] as String?, it[1] as String?, it[2] as String?, it[3] as String?,
-                    it[4] as String?, it[5] as String?, it[6] as String?, it[7] as Int?)
+                    it[4] as String?, it[5] as String?, it[6] as String?, it[7] as Int?, it.getOrNull(8) as? Boolean ?: false)
             },
         )
     }

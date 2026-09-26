@@ -91,6 +91,7 @@ internal fun HomeEditMenu(anchor: androidx.compose.ui.unit.IntRect?, onDismiss: 
             }
         }
     }
+    if (!rememberHomePopupVisible(onDismiss = onDismiss)) return
     androidx.compose.ui.window.Popup(popupPositionProvider = position, onDismissRequest = onDismiss,
         properties = androidx.compose.ui.window.PopupProperties(focusable = true)) {
         Column(Modifier.width(250.dp)

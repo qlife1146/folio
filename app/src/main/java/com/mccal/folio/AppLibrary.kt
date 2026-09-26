@@ -36,6 +36,7 @@ import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.boundsInWindow
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /** Incremented to focus the All apps search field (e.g. after a middle swipe-down on Home). */
 internal val librarySearchFocusRequests = mutableIntStateOf(0)
@@ -48,6 +49,8 @@ internal fun AppLibrary(
     drag: HomeDragState? = null, page: Int? = null,
     onLaunchFrom: (AppEntry, android.graphics.Rect?) -> Unit = { app, _ -> onLaunch(app) },
     onTurnOnWork: (Long) -> Unit = {},
+    homeRequests: Int = 0,
+    active: Boolean = true,
 ) {
     val appOptionsLabel = stringResource(R.string.app_options)
     val glass = !editing
@@ -72,9 +75,7 @@ internal fun AppLibrary(
     }
     val listState = rememberLazyListState()
     val selectedProfile = if (showWork) state.profiles.firstOrNull { it.isWork } else state.profiles.firstOrNull { it.isPersonal }
-    LaunchedEffect(showWork, selectedProfile?.available, selectedProfile?.quiet) {
-        listState.scrollToItem(0)
-    }
+    val downloads = Installs.active.collectAsStateWithLifecycle().value.values.filter { it.newApp }.distinctBy { it.packageName }
     // Hidden apps stay out of the App Library entirely, like iOS; they're listed (after unlocking) in Settings.
     val visibleApps = remember(state.apps, query, showWork, workSwitch, hasWork, state.hiddenApps, editing) {
         val text = query.trim()
@@ -84,7 +85,7 @@ internal fun AppLibrary(
             (editing || it.id !in state.hiddenApps) }
     }
     // iOS-style App Library: category tiles while browsing; the A–Z list for search, hidden and editing.
-    var openCategory by remember { mutableStateOf<LibraryCategory?>(null) }
+    var openCategory by remember(homeRequests) { mutableStateOf<LibraryCategory?>(null) }
     val browsing = state.libraryCategories && !editing && query.isBlank()
     val categorized by produceState(emptyMap<LibraryCategory, List<AppEntry>>(), visibleApps, browsing) {
         if (!browsing) return@produceState
@@ -99,6 +100,10 @@ internal fun AppLibrary(
                 grouped.entries.sortedWith(compareBy({ it.key == LibraryCategory.OTHER }, { -it.value.size })).forEach { put(it.key, it.value) }
             }
         }
+    }
+    // Reset retained pager content on entry, and after the initial category data replaces the A–Z rows.
+    LaunchedEffect(active, homeRequests, browsing, categorized.isNotEmpty(), showWork, selectedProfile?.available, selectedProfile?.quiet) {
+        listState.scrollToItem(index = 0, scrollOffset = 0)
     }
     val groups = remember(visibleApps) {
         visibleApps.groupBy {
@@ -143,7 +148,7 @@ internal fun AppLibrary(
                             Modifier.padding(top = FolioSpace.COMPACT.dp), tag = "turn-on-work")
                     }
                 }
-                if (!editing && query.isBlank()) item("downloading") { DownloadingApps(ink) }
+                if (!editing && query.isBlank() && downloads.isNotEmpty()) item("downloading") { DownloadingApps(ink, downloads) }
                 if (!editing && query.isNotBlank()) item("web-search") {
                     WebSearchRow(query) { openWebSearch(context, it, query) }
                 }
@@ -153,7 +158,8 @@ internal fun AppLibrary(
                     items(categorized.entries.toList().chunked(columns), key = { row -> "cat-" + row.first().key.name }) { row ->
                         Row(Modifier.fillMaxWidth().padding(bottom = FolioSpace.COMFY.dp), horizontalArrangement = Arrangement.spacedBy(FolioSpace.COMFY.dp)) {
                             row.forEach { (cat, apps) ->
-                                CategoryCard(stringResource(cat.title), apps, Modifier.weight(1f), labelColor = ink, onLaunch = { onLaunchFrom(it, null) }) { openCategory = cat }
+                                CategoryCard(stringResource(cat.title), apps, Modifier.weight(1f), labelColor = ink,
+                                    onLaunch = { onLaunchFrom(it, null) }, onActions = onActions) { openCategory = cat }
                             }
                             repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
                         }

@@ -16,10 +16,13 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionOnScreen
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -71,7 +74,8 @@ internal enum class LibraryCategory(@androidx.annotation.StringRes val title: In
 
 /** iOS App Library tile: three big icons and a mini cluster that opens the whole category. */
 @Composable
-internal fun CategoryCard(title: String, apps: List<AppEntry>, modifier: Modifier, labelColor: Color = Color.White, onLaunch: (AppEntry) -> Unit, onOpen: () -> Unit) {
+internal fun CategoryCard(title: String, apps: List<AppEntry>, modifier: Modifier, labelColor: Color = Color.White,
+    onLaunch: (AppEntry) -> Unit, onActions: (AppEntry) -> Unit, onOpen: () -> Unit) {
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         BoxWithConstraints(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(FolioRadius.PANEL.dp)).background(FolioGlass.card)
             .border(FolioGlass.edge, RoundedCornerShape(FolioRadius.PANEL.dp)).padding(FolioSpace.MEDIUM.dp)) {
@@ -84,8 +88,21 @@ internal fun CategoryCard(title: String, apps: List<AppEntry>, modifier: Modifie
                     for (col in 0 until 2) {
                         val index = row * 2 + col
                         when {
-                            index < big.size -> AppIcon(big[index], big[index].label, Modifier.size(cell)
-                                .clickable { onLaunch(big[index]) }, shape = RoundedCornerShape(cell * .24f))
+                            index < big.size -> {
+                                val app = big[index]
+                                val bounds = remember(app.id) { android.graphics.Rect() }
+                                AppIcon(app, app.label, Modifier.size(cell)
+                                    .onGloballyPositioned {
+                                        val position = it.positionOnScreen()
+                                        bounds.set(position.x.toInt(), position.y.toInt(),
+                                            (position.x + it.size.width).toInt(), (position.y + it.size.height).toInt())
+                                    }
+                                    .combinedClickable(onClick = { onLaunch(app) }, onLongClick = {
+                                        // An app can appear in Suggestions and its category: use the icon actually held.
+                                        IconBounds.update(app.id, bounds)
+                                        onActions(app)
+                                    }), shape = RoundedCornerShape(cell * .24f))
+                            }
                             index == 3 && rest.isNotEmpty() -> Box(Modifier.size(cell).clip(RoundedCornerShape(cell * .24f))
                                 .clickable(onClick = onOpen).semantics { contentDescription = "Show all ${apps.size} $title apps" }) {
                                 val mini = (cell - 4.dp) / 2
@@ -112,7 +129,7 @@ internal fun CategoryCard(title: String, apps: List<AppEntry>, modifier: Modifie
 /** An App Library category opened like an iOS folder: big title and a rounded glass card of every app, over a dimmed background. */
 @Composable
 internal fun CategoryFolder(title: String, apps: List<AppEntry>, onDismiss: () -> Unit, onLaunch: (AppEntry) -> Unit, onActions: (AppEntry) -> Unit) {
-    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss,
+    HomeDismissibleDialog(onDismissRequest = onDismiss,
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         FolioDialogWindow(dim = 0f, blurRadiusDp = 24)
         val appear = rememberEntrance(stiffness = 600f, dampingRatio = .82f)

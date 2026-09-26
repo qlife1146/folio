@@ -111,6 +111,7 @@ data class LauncherState(
     val hiddenApps: Set<String> = emptySet(),
     /** Show the vertical island (media and live progress) in the side rail. */
     val island: Boolean = true,
+    val islandInSpotlight: Boolean = true,
     /** Top pulls open Folio's iOS-style panels instead of the Android system shade. */
     val folioPanels: Boolean = true,
     val minPages: Int = 1,
@@ -215,6 +216,7 @@ data class LauncherState(
     /** Tweaks the user has added from the Tweak Library; only these show in Settings › Tweaks. */
     val installedTweaks: Set<String> = emptySet(),
     val folderBackground: FolderBackground = FolderBackground.GLASS,
+    val folderBackdropOpacity: Float = .42f,
     val labelSize: LabelSize = LabelSize.STANDARD,
     val motionSpeed: MotionSpeed = MotionSpeed.STANDARD,
     /** How Home pages move as you swipe between them. [PageEffect.NONE] is the default and the flat swipe. */
@@ -675,6 +677,11 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
     }
     fun removeAppFromFolder(folderId: String, appId: String, target: DropTarget) =
         commitLayout(com.mccal.folio.removeAppFromFolder(mutable.value.layout, folderId, appId, target, mutable.value.homeAppRows))
+    fun setFolderApps(folderId: String, appIds: List<String>): Boolean {
+        val old = mutable.value
+        val installed = old.apps.mapTo(mutableSetOf(), AppEntry::id)
+        return commitLayout(com.mccal.folio.setFolderApps(old.layout, folderId, appIds.filter { it in installed }))
+    }
     fun moveFolderApp(folderId: String, appId: String, index: Int) =
         commitLayout(com.mccal.folio.moveFolderApp(mutable.value.layout, folderId, appId, index))
     fun folder(id: String) = mutable.value.layout.folder(id)
@@ -710,7 +717,7 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
         val target = mutable.value.layout.placement(to) ?: return false
         return moveWidgetTo(from, target.page * HOME_CELLS + target.row * GRID_COLUMNS + target.column)
     }
-    fun moveWidgetTo(slot: Int, index: Int) = commitLayout(moveWidget(mutable.value.layout, slot, index))
+    fun moveWidgetTo(slot: Int, index: Int) = commitLayout(moveWidget(mutable.value.layout, slot, index, mutable.value.homeAppRows))
     fun resizeWidget(slot: Int, spanX: Int, spanY: Int) = commitLayout(resizeWidget(mutable.value.layout, slot, spanX, spanY))
     fun placeWidget(placement: WidgetPlacement) = commitLayout(placeWidget(mutable.value.layout, placement))
     fun placement(slot: Int) = mutable.value.layout.placement(slot)
@@ -835,6 +842,7 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
     fun setWidgetGlass(value: Float) = updateSettings(soon = true) { it.copy(widgetGlass = value.coerceIn(0f, 1f)) }
     fun setFolderColumns(value: Int) = updateSettings(soon = false) { it.copy(folderColumns = value.takeIf { v -> v in setOf(0, 3, 4) } ?: 0) }
     fun setFolderBackground(value: FolderBackground) = updateSettings(soon = false) { it.copy(folderBackground = value) }
+    fun setFolderBackdropOpacity(value: Float) = updateSettings(soon = true) { it.copy(folderBackdropOpacity = value.coerceIn(0f, 1f)) }
     fun setLabelSize(value: LabelSize) = updateSettings(soon = false) { it.copy(labelSize = value) }
     fun setMotionSpeed(value: MotionSpeed) = updateSettings(soon = false) { it.copy(motionSpeed = value) }
     fun setPageEffect(value: PageEffect) = updateSettings(soon = false) { it.copy(pageEffect = value) }
@@ -1006,6 +1014,7 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
     fun setStatusStyle(style: StatusStyle) = updateSettings(soon = true) { it.copy(statusStyle = style) }
     fun setFolioPanels(value: Boolean) = updateSettings(soon = false) { it.copy(folioPanels = value) }
     fun setIsland(value: Boolean) = updateSettings(soon = false) { it.copy(island = value) }
+    fun setIslandInSpotlight(value: Boolean) = updateSettings(soon = false) { it.copy(islandInSpotlight = value) }
     fun setHidden(id: String, hidden: Boolean) = updateSettings(soon = false) { it.copy(hiddenApps = if (hidden) it.hiddenApps + id else it.hiddenApps - id) }
     /** Renames one app everywhere it appears; a blank name puts the name Android reports back. */
     fun renameApp(id: String, name: String) = updateSettings(soon = false) { s ->
@@ -1118,6 +1127,7 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
             .put(SettingKeys.LEFT_HANDED, s.leftHanded)
             .put("hiddenApps", JSONArray(s.hiddenApps.toList()))
             .put("island", s.island)
+            .put("islandInSpotlight", s.islandInSpotlight)
             .put("folioPanels", s.folioPanels)
             .put("minPages", s.minPages)
             .put("statusStyle", s.statusStyle.toJson())
@@ -1134,6 +1144,7 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
             .put("layoutHistory", s.layoutHistory).put("dockRecentDots", s.dockRecentDots)
             .put("installedTweaks", JSONArray(s.installedTweaks.toList()))
             .put("folderColumns", s.folderColumns).put("folderBackground", s.folderBackground.name)
+            .put("folderBackdropOpacity", s.folderBackdropOpacity.toDouble())
             .put("labelSize", s.labelSize.name).put("motionSpeed", s.motionSpeed.name).put("pageEffect", s.pageEffect.name)
             .put("widgetGlass", s.widgetGlass.toDouble()).put("glassOutline", s.glassOutline.toDouble())
             .put("focusModes", focusModesToJson(s.focusModes))
@@ -1339,6 +1350,7 @@ internal fun decodeLauncherState(raw: String, legacyRaw: String?): LauncherState
         leftHanded = j.optBoolean("leftHanded", false),
         hiddenApps = j.optJSONArray("hiddenApps")?.let { a -> (0 until a.length()).map(a::getString).toSet() } ?: emptySet(),
         island = j.optBoolean("island", true),
+        islandInSpotlight = j.optBoolean("islandInSpotlight", true),
         folioPanels = j.optBoolean("folioPanels", true),
         minPages = j.optInt("minPages", 1).coerceIn(1, 20),
         statusStyle = StatusStyle.fromJson(j.optJSONObject("statusStyle")),
@@ -1383,6 +1395,7 @@ internal fun decodeLauncherState(raw: String, legacyRaw: String?): LauncherState
         layoutHistory = j.optBoolean("layoutHistory", false), dockRecentDots = j.optBoolean("dockRecentDots", false),
         folderColumns = j.optInt("folderColumns", 0).takeIf { it in setOf(0, 3, 4) } ?: 0,
         folderBackground = runCatching { FolderBackground.valueOf(j.optString("folderBackground")) }.getOrDefault(FolderBackground.GLASS),
+        folderBackdropOpacity = j.optDouble("folderBackdropOpacity", .42).toFloat().coerceIn(0f, 1f),
         labelSize = runCatching { LabelSize.valueOf(j.optString("labelSize")) }.getOrDefault(LabelSize.STANDARD),
         motionSpeed = runCatching { MotionSpeed.valueOf(j.optString("motionSpeed")) }.getOrDefault(MotionSpeed.STANDARD),
         // A save from before Page Effects, and anything unrecognised, reads as the flat swipe.

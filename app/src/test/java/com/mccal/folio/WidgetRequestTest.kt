@@ -11,12 +11,11 @@ class WidgetRequestTest {
         return WidgetRequest.Saver.restore(requireNotNull(saved))!!
     }
 
-    @Test fun `a request for one app's widget at an exact cell comes back whole`() {
-        val back = roundTrip(WidgetRequest(slot = 4, targetIndex = 17, exactTarget = true,
+    @Test fun `a request for one app's widget comes back whole`() {
+        val back = roundTrip(WidgetRequest(slot = 4, targetIndex = 17,
             packageName = "com.example.weather", profileSerial = 10L))
         assertEquals(4, back.slot)
         assertEquals(17, back.targetIndex)
-        assertEquals(true, back.exactTarget)
         assertEquals("com.example.weather", back.packageName)
         assertEquals(10L, back.profileSerial)
         assertEquals(null, back.stackSlot)
@@ -31,12 +30,11 @@ class WidgetRequestTest {
     }
 
     @Test fun `showing every app again keeps the spot it was going to`() {
-        val request = WidgetRequest(slot = 3, targetIndex = 12, exactTarget = true,
+        val request = WidgetRequest(slot = 3, targetIndex = 12,
             packageName = "com.example.weather", profileSerial = 10L)
         request.anyApp()
         assertEquals(null, request.packageName)
         assertEquals(null, request.profileSerial)
-        assertEquals(false, request.exactTarget)
         // The spot is still the one the picker was opened for.
         assertEquals(3, request.slot)
         assertEquals(12, request.targetIndex)
