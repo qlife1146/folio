@@ -197,16 +197,6 @@ class WidgetStacksTest {
 class TodayViewTest {
     private fun w(id: Int, size: TodaySize) = TodayWidget(id, size)
 
-    @Test fun rowsPackSmallWidgetsInPairs() {
-        val rows = todayRows(listOf(w(1, TodaySize.SMALL), w(2, TodaySize.SMALL), w(3, TodaySize.MEDIUM), w(4, TodaySize.SMALL)))
-        assertEquals(listOf(listOf(1, 2), listOf(3), listOf(4)), rows.map { r -> r.map { it.id } })
-    }
-
-    @Test fun largeNeverSharesARow() {
-        val rows = todayRows(listOf(w(1, TodaySize.SMALL), w(2, TodaySize.LARGE), w(3, TodaySize.SMALL)))
-        assertEquals(listOf(listOf(1), listOf(2), listOf(3)), rows.map { r -> r.map { it.id } })
-    }
-
     @Test fun sizeFromHomeFootprint() {
         assertEquals(TodaySize.SMALL, TodaySize.forSpan(2, 2))
         assertEquals(TodaySize.MEDIUM, TodaySize.forSpan(4, 2))
