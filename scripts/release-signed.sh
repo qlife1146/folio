@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds a signed Folio release: dist/Folio-<version>/ with the APK, SHA256SUMS.txt, the signing certificate and
+# Builds a signed folio-duo release: dist/folio-duo-<version>/ with the APK, SHA256SUMS.txt, the signing certificate and
 # the release's feature wall if there is one (FOLIO_WALL, or folio-marketing/walls/<version>/).
 # Needs FOLIO_RELEASE_STORE_FILE (outside the repo), FOLIO_RELEASE_STORE_PASSWORD, FOLIO_RELEASE_KEY_ALIAS and
 # FOLIO_RELEASE_KEY_PASSWORD in the environment. GitHub attaches the source code to every release on its own.
@@ -11,7 +11,7 @@ if [[ -z "$version" ]]; then
     echo "Could not read folioVersion from app/build.gradle.kts." >&2
     exit 1
 fi
-output_dir=${1:-"$repository_root/dist/Folio-$version"}
+output_dir=${1:-"$repository_root/dist/folio-duo-$version"}
 
 # REL-10, REL-15, REL-16 (docs/standards/releases.md): a version number means one build. Refuse to make a second one
 # under a number that has already been published, and refuse to build a stable release whose notes still say they
@@ -91,7 +91,7 @@ trap cleanup EXIT
 
 package_dir="$staging_dir/$(basename "$output_dir")"
 mkdir -p "$package_dir"
-apk_name="Folio-$version.apk"
+apk_name="folio-duo_${version}.apk"
 cp -p "$apk_source" "$package_dir/$apk_name"
 
 # Fails if the APK isn't properly signed; the certificate digest lets people check updates come from the same key.

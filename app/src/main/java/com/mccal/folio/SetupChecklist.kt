@@ -61,10 +61,6 @@ internal fun rememberSetupSteps(isDefaultHome: Boolean, onMakeDefault: () -> Uni
             SetupStep(Icons.Rounded.Accessibility, context.getString(R.string.folio_gestures_service),
                 context.getString(R.string.lets_pull_downs_open_system_panels_and_s),
                 SystemShadeAccessibilityService.isConnected(), true, context.getString(R.string.turn_on)) { onShadeSetup() },
-            // Samsung's setting; on phones without it there's nothing to set, so it isn't a step.
-            if (foldLockSetting(context) != null) SetupStep(Icons.Rounded.Devices, context.getString(R.string.continue_apps_on_cover_screen_always),
-                context.getString(R.string.keeps_the_cover_screen_on_when_you_fold),
-                foldStaysAwake(context), true, context.getString(R.string.open)) { open(Intent(Settings.ACTION_DISPLAY_SETTINGS)) } else null,
             SetupStep(Icons.Rounded.LightMode, context.getString(R.string.modify_system_settings),
                 context.getString(R.string.lets_control_center_change_brightness_an),
                 Settings.System.canWrite(context), false, context.getString(R.string.allow)) {
@@ -75,12 +71,6 @@ internal fun rememberSetupSteps(isDefaultHome: Boolean, onMakeDefault: () -> Uni
             SetupStep(Icons.Rounded.Wallpaper, context.getString(R.string.keep_your_wallpaper),
                 context.getString(R.string.coming_from_samsung_s_or_another_launche),
                 systemWallpaper, false, context.getString(R.string.use)) { onSystemWallpaper(true); context.asActivity()?.applyWallpaperWindow(true) },
-            SetupStep(Icons.Rounded.Assistant, context.getString(R.string.folio_as_your_digital_assistant),
-                context.getString(R.string.holding_the_side_key_opens_folio_s_picke),
-                AssistPickerActivity.isDefaultAssistant(context), false, context.getString(R.string.choose)) { open(AssistPickerActivity.settingsIntent()) },
-            if (sideKeySettings(context) != null) SetupStep(Icons.Rounded.TouchApp, context.getString(R.string.hold_side_key_digital_assistant),
-                context.getString(R.string.samsung_side_button_press_and_hold_digit),
-                sideKeyHoldIsAssistant(context), false, context.getString(R.string.open)) { sideKeySettings(context)?.let(::open) } else null,
             SetupStep(Icons.Rounded.Contacts, context.getString(R.string.contacts_in_spotlight), context.getString(R.string.search_your_contacts_from_spotlight),
                 granted(context, Manifest.permission.READ_CONTACTS), false, context.getString(R.string.allow)) { contacts.launch(Manifest.permission.READ_CONTACTS) },
             // Only for people who already use OpenBubbles (iMessage on Android); Folio just opens it.
@@ -119,4 +109,3 @@ private fun foldLockSetting(context: Context): String? =
     runCatching { Settings.System.getString(context.contentResolver, "fold_lock_behavior_setting") }.getOrNull()
 
 internal fun foldStaysAwake(context: Context) = foldLockSetting(context) == "stay_awake_on_fold_key"
-

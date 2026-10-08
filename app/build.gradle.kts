@@ -31,7 +31,7 @@ val releaseStoreFile = releaseSigningValues["FOLIO_RELEASE_STORE_FILE"]?.let { c
     }
 }
 
-val folioVersion = "0.6.7-beta.3"
+val folioVersion = "1.0.0"
 
 /**
  * The profile is recorded from the "fast" build ("Folio Dev", debug-signed) because the release APK can't be
@@ -95,7 +95,7 @@ android {
                 "proguard-rules.pro",
             )
             if (releaseStoreFile != null) signingConfig = signingConfigs.getByName("release")
-            manifestPlaceholders["appLabel"] = "folio_fork"
+            manifestPlaceholders["appLabel"] = "folio-duo"
         }
         // Optimized like release (R8, no debuggable JIT slowdown) but signed with the local debug key, so it
         // installs over a debug build and keeps Folio's data. Use this to judge real smoothness on the phone.
@@ -105,14 +105,14 @@ android {
             matchingFallbacks += "release"
             // Its own app ("Folio Dev") so test builds install next to the signed release instead of over it.
             applicationIdSuffix = ".dev"
-            manifestPlaceholders["appLabel"] = "Folio Dev"
+            manifestPlaceholders["appLabel"] = "folio-duo Dev"
         }
         // Same app id as "fast", so one build installs over the other and Folio Dev keeps its layout and settings.
         // Only the name differs, because that is the one place you can tell them apart on the phone, and it matters:
         // a debug build is far slower, so frame numbers taken on one mean nothing next to numbers from the other.
         getByName("debug") {
             applicationIdSuffix = ".dev"
-            manifestPlaceholders["appLabel"] = "Folio Debug"
+            manifestPlaceholders["appLabel"] = "folio-duo Debug"
         }
     }
     // "fast" uses release's no-op tracing/diagnostic sources.

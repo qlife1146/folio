@@ -1,9 +1,18 @@
 # Changelog
 
-All notable changes to Folio. Versions follow [Semantic Versioning](https://semver.org) (MAJOR.MINOR.PATCH; 0.x while
-Folio is in development), and this file follows [Keep a Changelog](https://keepachangelog.com). The app's
+All notable changes to folio-duo, a personal fork of Folio. Versions follow [Semantic Versioning](https://semver.org)
+(MAJOR.MINOR.PATCH), and this file follows [Keep a Changelog](https://keepachangelog.com). The app's
 `versionCode` is derived from the version name ((MAJOR × 10000 + MINOR × 100 + PATCH) × 10 + HOTFIX), so every release sorts correctly and a fix on top of one has nine numbers of its own.
-Folio shows the newest section on the phone after an update, and every version under Settings › What's New › Version History.
+
+## [1.0.0] - 2026-10-08
+
+### Changed
+
+- **folio-duo personal fork:** the app is now named folio-duo and starts its own release series at 1.0.0. Earlier Folio release records remain below.
+- **Focused settings:** settings have been simplified around the features retained in folio-duo, with retired options kept off when older settings or backups are restored.
+- **Current help and setup:** Help and the initial guidance describe the current features and workflows. Email reporting paths have been removed.
+- **Fork updates:** update checks now use [qlife1146/folio Releases](https://github.com/qlife1146/folio/releases).
+- **Existing launcher tools:** folder management, Spotlight search, widget editing, app security and expanded backups remain available.
 
 ## [0.6.7] - Unreleased
 

@@ -9,7 +9,7 @@ import java.net.URLEncoder
  * browser; nothing is sent until you submit the form yourself.
  */
 internal object BugReport {
-    const val NEW_ISSUE = "https://github.com/McCal-Codes/folio/issues/new"
+    const val NEW_ISSUE = "https://github.com/qlife1146/folio/issues/new"
 
     fun url(version: String?, manufacturer: String, model: String, androidRelease: String, sdk: Int, screen: String? = null): String {
         fun enc(value: String) = URLEncoder.encode(value, Charsets.UTF_8.name())

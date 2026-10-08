@@ -506,34 +506,18 @@ internal fun CustomizationSheet(state: LauncherState, initiallyWide: Boolean, mo
                     // Getting help lives here rather than as more rows in the main list (fewer choices there).
                     val helpContext = androidx.compose.ui.platform.LocalContext.current
                     SheetGroup {
-                        var askDiagnostics by remember { mutableStateOf(false) }
-                        // Outside the dialog on purpose: closing the dialog is the first thing either button does, and
-                        // a scope that went with it cancelled the report before it had been written.
                         val reportScope = rememberCoroutineScope()
-                        TweakRow(Icons.Rounded.BugReport, FolioColors.Value.Red, stringResource(R.string.report_a_bug), "customization-report-bug") { askDiagnostics = true }
-                        if (askDiagnostics) {
-                            fun openForm() { runCatching { helpContext.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(BugReport.url(helpContext)))) } }
-                            AlertDialog(onDismissRequest = { askDiagnostics = false },
-                                title = { Text(stringResource(R.string.how_should_this_report_go)) },
-                                text = { Text(stringResource(R.string.email_needs_no_account)) },
-                                confirmButton = { TextButton(onClick = { askDiagnostics = false
-                                    reportScope.launch { runCatching { helpContext.startActivity(Diagnostics.reportIntent(helpContext, email = true)) } } },
-                                    modifier = Modifier.testTag("report-email")) { Text(stringResource(R.string.email_a_report)) } },
-                                dismissButton = { TextButton(onClick = { askDiagnostics = false
-                                    // Copied off the main thread first, so the form opens with the details ready to paste.
-                                    reportScope.launch { Diagnostics.copy(helpContext); openForm() } },
-                                    modifier = Modifier.testTag("report-copy-diagnostics")) { Text(stringResource(R.string.use_github_instead)) } })
+                        TweakRow(Icons.Rounded.BugReport, FolioColors.Value.Red, stringResource(R.string.report_a_bug), "customization-report-bug") {
+                            reportScope.launch {
+                                Diagnostics.copy(helpContext)
+                                runCatching { helpContext.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(BugReport.url(helpContext)))) }
+                            }
                         }
                         MenuDivider()
                         TweakRow(Icons.Rounded.WavingHand, FolioColors.Value.Orange, stringResource(R.string.show_welcome_again), "customization-onboarding") { onClose(); onShowWelcome() }
                     }
                     CardNote(stringResource(R.string.report_a_bug_opens_github_in_your_browse), Modifier.padding(horizontal = FolioSpace.LARGE.dp))
-                    LauncherHelp(
-                        isDefaultHome = isDefaultHome,
-                        onHomeSettings = onMakeDefault,
-                        onAddWidget = { onAddWidget(homePage) },
-                        onShadeSetup = onShadeSetup,
-                    )
+                    LauncherHelp()
                 }
                 CustomizationPage.ADVANCED -> {
                     SettingsCard(stringResource(R.string.screenshot_mode)) {
@@ -712,33 +696,29 @@ internal fun CustomizationSheet(state: LauncherState, initiallyWide: Boolean, mo
 }
 
 @Composable
-private fun LauncherHelp(
-    isDefaultHome: Boolean,
-    onHomeSettings: () -> Unit,
-    onAddWidget: () -> Unit,
-    onShadeSetup: () -> Unit,
-) {
+private fun LauncherHelp() {
     SheetGroup {
-        HelpTip(Icons.Rounded.Home, FolioColors.Value.Blue, stringResource(R.string.edit_home), stringResource(R.string.hold_an_app_for_its_menu_or_move_while_h))
+        HelpTip(Icons.Rounded.Home, FolioColors.Value.Blue, stringResource(R.string.edit_home), stringResource(R.string.duo_help_edit))
         MenuDivider()
-        HelpTip(Icons.Rounded.Widgets, FolioColors.Value.Indigo, stringResource(R.string.widgets_smart_stacks), stringResource(R.string.hold_a_widget_and_let_go_for_sizes_stack))
+        HelpTip(Icons.Rounded.Widgets, FolioColors.Value.Indigo, stringResource(R.string.widgets), stringResource(R.string.duo_help_widgets))
         MenuDivider()
-        HelpTip(Icons.Rounded.SwipeDown, FolioColors.Value.RedLight, stringResource(R.string.notifications_control_center), stringResource(R.string.pull_down_from_the_top_left_or_top_right))
-        MenuDivider()
-        HelpTip(Icons.Rounded.Circle, FolioColors.Value.SecondaryBackground, stringResource(R.string.live_activities), stringResource(R.string.live_activities_help))
-        MenuDivider()
-        HelpTip(Icons.Rounded.Devices, FolioColors.Value.Pink, stringResource(R.string.folding), stringResource(R.string.folio_fades_between_screens_and_keeps_th))
+        HelpTip(Icons.Rounded.Folder, FolioColors.Value.Orange, stringResource(R.string.folders), stringResource(R.string.duo_help_folders))
     }
     SheetGroup {
-        IosActionRow(stringResource(R.string.add_widget_to_this_page_2), "help-add-widget", onClick = onAddWidget)
+        HelpTip(Icons.Rounded.Apps, FolioColors.Value.Indigo, stringResource(R.string.app_library), stringResource(R.string.duo_help_library))
+        MenuDivider()
+        HelpTip(Icons.Rounded.Search, FolioColors.Value.Blue, stringResource(R.string.spotlight), stringResource(R.string.duo_help_spotlight))
+        MenuDivider()
+        HelpTip(Icons.Rounded.Lock, FolioColors.Value.Orange, stringResource(R.string.duo_help_security_title), stringResource(R.string.duo_help_security))
     }
-    // The person behind Folio, for anything a bug report doesn't cover.
-    val helpContext = androidx.compose.ui.platform.LocalContext.current
     SheetGroup {
-        IosActionRow(stringResource(R.string.email_the_developer), "help-contact-email") {
-            runCatching { helpContext.startActivity(android.content.Intent(android.content.Intent.ACTION_SENDTO, android.net.Uri.parse("mailto:contact@mcc-cal.com"))
-                .putExtra(android.content.Intent.EXTRA_SUBJECT, "Folio").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
-        }
+        HelpTip(Icons.Rounded.Notifications, FolioColors.Value.RedLight, stringResource(R.string.notifications_control_center), stringResource(R.string.duo_help_notifications))
+        MenuDivider()
+        HelpTip(Icons.Rounded.Circle, FolioColors.Value.SecondaryBackground, stringResource(R.string.live_activities), stringResource(R.string.duo_help_live_activities))
+        MenuDivider()
+        HelpTip(Icons.Rounded.Save, FolioColors.Value.Blue, stringResource(R.string.backup), stringResource(R.string.duo_help_backup))
+        MenuDivider()
+        HelpTip(Icons.Rounded.SystemUpdate, FolioColors.Value.Indigo, stringResource(R.string.app_update_title), stringResource(R.string.duo_help_updates))
     }
 }
 
@@ -750,8 +730,8 @@ private fun HelpTip(icon: ImageVector, color: Long, title: String, detail: Strin
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, color = androidx.compose.ui.graphics.Color.White, fontSize = FolioType.BODY.sp)
-            Text(detail, color = androidx.compose.ui.graphics.Color.White.copy(alpha = .55f), fontSize = 14.sp)
+            Text(title, color = FolioGlass.ink, fontSize = FolioType.BODY.sp)
+            Text(detail, color = FolioGlass.secondaryInk, fontSize = 14.sp)
         }
     }
 }
@@ -1085,7 +1065,7 @@ internal fun settingsMatches(query: String, title: String, keywords: String): Bo
         }
         val shareScope = rememberCoroutineScope()
         CardAction(stringResource(R.string.share_diagnostics), onClick = {
-            shareScope.launch { runCatching { context.startActivity(Diagnostics.reportIntent(context, email = false)) } }
+            shareScope.launch { runCatching { context.startActivity(Diagnostics.reportIntent(context)) } }
         }, modifier = Modifier.testTag("share-diagnostics"))
         CardNote(stringResource(R.string.diagnostics_file_note))
     }

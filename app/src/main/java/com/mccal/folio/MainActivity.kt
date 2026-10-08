@@ -151,11 +151,11 @@ class MainActivity : ComponentActivity() {
                     val report = unreported.value
                     unreported.value = null
                     reportScope.launch {
-                        runCatching { startActivity(Diagnostics.reportIntent(this@MainActivity, email = true)) }
+                        runCatching { startActivity(Diagnostics.reportIntent(this@MainActivity)) }
                             .onSuccess { report?.let { Diagnostics.markAsked(this@MainActivity, it) } }
                             .onFailure { IslandEvents.notice(this@MainActivity, getString(R.string.the_report_couldn_t_be_opened)) }
                     }
-                }) { androidx.compose.material3.Text(stringResource(R.string.send_report)) } },
+                }) { androidx.compose.material3.Text(stringResource(R.string.share_diagnostics)) } },
                 dismissButton = { androidx.compose.material3.TextButton(onClick = {
                     unreported.value?.let { Diagnostics.markAsked(this@MainActivity, it) }; unreported.value = null
                 }) { androidx.compose.material3.Text(stringResource(R.string.not_now)) } })
@@ -462,7 +462,7 @@ class MainActivity : ComponentActivity() {
         shadeSetupDialog = android.app.AlertDialog.Builder(this)
             .setTitle(getString(R.string.turn_on_folio_gestures))
             .setMessage("Android asks you to turn this on yourself:\n\n" +
-                "1. Tap Open Settings, find “Folio gestures & overlays” (often under Installed apps) and turn it on.\n" +
+                "1. Tap Open Settings, find “${getString(R.string.shade_service_label)}” (often under Installed apps) and turn it on.\n" +
                 "2. If it's greyed out, or you see “App was denied access” or “Restricted setting”, tap App Info below, open the ⋮ menu " +
                 "(top right), choose “Allow restricted settings” and confirm, then come back and turn it on. Android does this for apps " +
                 "installed from a browser or file; it's a one-time step.\n\n" +

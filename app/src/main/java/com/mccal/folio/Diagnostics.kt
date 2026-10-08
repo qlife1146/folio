@@ -141,7 +141,7 @@ internal object Diagnostics {
             "font ${config.fontScale}×",
             "animations ${scale}×",
             "left page ${state?.optString("leftPage", "TODAY") ?: "?"}",
-            "wallpaper ${if (state?.optBoolean("systemWallpaper", false) == true) "Android" else "Folio"}",
+            "wallpaper ${if (state?.optBoolean("systemWallpaper", false) == true) "Android" else "folio-duo"}",
             "fold effect ${if (state?.optBoolean("foldEffect", true) != false) "on" else "off"}",
             "page effect ${state?.optString("pageEffect")?.ifBlank { PageEffect.NONE.name } ?: "?"}",
             "safe mode ${if (SafeMode.active) "on" else "off"}",
@@ -155,14 +155,14 @@ internal object Diagnostics {
      * Folio's own log lines (apps can only read their own). Built on demand, shown to you before it goes anywhere.
      */
     fun bundle(context: Context): String = buildString {
-        appendLine("Folio diagnostics (${format(System.currentTimeMillis())})")
+        appendLine("folio-duo diagnostics (${format(System.currentTimeMillis())})")
         appendLine(CrashLog.environment(context))
         appendLine()
         appendLine("Recent events:")
         appendLine(trailText().ifBlank { "(none)" })
         CrashLog.reports(context).take(3).forEach { appendLine(); appendLine("---- ${it.name}"); appendLine(it.readText().take(12_000)) }
         appendLine()
-        appendLine("---- Folio log")
+        appendLine("---- folio-duo log")
         append(ownLog().takeLast(20_000))
     }.take(60_000)
 
@@ -178,22 +178,18 @@ internal object Diagnostics {
      */
     suspend fun bundleOffMain(context: Context): String = withContext(Dispatchers.IO) { bundle(context) }
 
-    /** Where an emailed report goes: no GitHub account needed, and nothing passes through a server of Folio's. */
-    const val SUPPORT_EMAIL = "contact@mcc-cal.com"
-
     /**
-     * The report as a file, handed to whatever app the person picks. An email app attaches it, so it arrives as one
-     * readable file instead of pages of pasted text, and they can open it before anything is sent. [email] addresses
-     * it to [SUPPORT_EMAIL]; without it, the share sheet leaves the choice of where entirely to them.
+     * The report as a file, handed to whatever app the person picks. The share sheet leaves the choice of where
+     * entirely to them, and they can open the file before sharing it.
      */
-    suspend fun reportIntent(context: Context, email: Boolean): Intent = withContext(Dispatchers.IO) {
+    suspend fun reportIntent(context: Context): Intent = withContext(Dispatchers.IO) {
         // Old reports are cleared, but not one a mail app may still be reading: only those more than ten minutes old,
         // and every report gets a name of its own, so two in the same minute don't overwrite each other.
         val dir = File(context.cacheDir, "reports").apply { mkdirs() }
         val now = System.currentTimeMillis()
         dir.listFiles()?.filter { now - it.lastModified() > 10 * 60_000 }?.forEach { it.delete() }
         val stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmmss"))
-        val file = File(dir, "folio-report-$stamp-${(1000..9999).random()}.txt").apply { writeText(bundle(context)) }
+        val file = File(dir, "folio-duo-report-$stamp-${(1000..9999).random()}.txt").apply { writeText(bundle(context)) }
         val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.reports", file)
         val version = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty()
         val send = Intent(Intent.ACTION_SEND).setType("text/plain")
@@ -203,18 +199,14 @@ internal object Diagnostics {
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         // The chooser only passes read access on if the file is also in clipData.
         send.clipData = ClipData.newRawUri("", uri)
-        if (email) {
-            send.putExtra(Intent.EXTRA_EMAIL, arrayOf(SUPPORT_EMAIL))
-            send.selector = Intent(Intent.ACTION_SENDTO, android.net.Uri.parse("mailto:"))
-        }
-        Intent.createChooser(send, context.getString(if (email) R.string.email_a_report else R.string.share_diagnostics))
+        Intent.createChooser(send, context.getString(R.string.share_diagnostics))
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
     }
 
     suspend fun copy(context: Context) {
         val text = bundleOffMain(context)
         context.getSystemService(android.content.ClipboardManager::class.java)
-            ?.setPrimaryClip(ClipData.newPlainText("Folio diagnostics", text))
+            ?.setPrimaryClip(ClipData.newPlainText("folio-duo diagnostics", text))
     }
 
     private const val ASKED = "report_asked_name"

@@ -83,7 +83,7 @@ internal fun Onboarding(isDefaultHome: Boolean, onMakeDefault: () -> Unit, onSha
                 onAction = { open(IslandListenerService.accessSettingsIntent(context)) }),
             OnboardingPage("gestures", Icons.Rounded.SwipeDown, FolioColors.Value.Green, context.getString(R.string.pull_down_for_more),
                 context.getString(R.string.onboarding_gestures_detail),
-                uses = listOf(context.getString(R.string.onboarding_use_panels), context.getString(R.string.onboarding_use_everywhere)),
+                uses = listOf(context.getString(R.string.onboarding_use_panels)),
                 action = context.getString(R.string.turn_on_button), done = { SystemShadeAccessibilityService.isConnected() }, onAction = onShadeSetup),
             OnboardingPage("look", Icons.Rounded.Wallpaper, FolioColors.Value.CyanLight, context.getString(R.string.choose_a_look),
                 context.getString(R.string.onboarding_look_detail),
