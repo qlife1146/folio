@@ -90,11 +90,10 @@ class ShadeZonesTest {
 
 class StatusStyleJsonTest {
     @Test fun roundTrip() {
-        val style = StatusStyle(showTime = false, showDate = true, showBatteryPercent = false, glyph = StatusGlyph.ICONS,
+        val style = StatusStyle(showTime = false, showDate = true, showBatteryPercent = false,
             colorfulBattery = false, railGlass = .5f, showSilent = false, background = false, spacing = 9f)
         assertEquals(style, StatusStyle.fromJson(style.toJson()))
         assertEquals(StatusStyle(spacing = StatusStyle.COMPACT_SPACING), StatusStyle.fromJson(StatusStyle(spacing = 0f).toJson()))
-        for (glyph in StatusGlyph.entries) assertEquals(glyph, StatusStyle.fromJson(StatusStyle(glyph = glyph).toJson()).glyph)
     }
 
     @Test fun savedSpacingChoicesKeepTheirLook() {
@@ -111,10 +110,9 @@ class StatusStyleJsonTest {
         assertEquals(true, StatusStyle.fromJson(org.json.JSONObject().put("glyph", "RING")).showSilent)
     }
 
-    @Test fun unknownGlyphAndOutOfRangeFrostFallBack() {
-        val json = org.json.JSONObject().put("glyph", "SPARKLES").put("railGlass", 3.0)
+    @Test fun outOfRangeFrostFallsBack() {
+        val json = org.json.JSONObject().put("railGlass", 3.0)
         val style = StatusStyle.fromJson(json)
-        assertEquals(StatusGlyph.RING, style.glyph)
         assertEquals(1f, style.railGlass)
         assertEquals(StatusStyle(), StatusStyle.fromJson(null))
     }
@@ -132,35 +130,6 @@ class PagesTest {
 
     @Test fun contentBeyondExplicitPagesStillCounts() {
         assertEquals(2, layout(HOME_CELLS + 1, minPages = 1).pageCount)
-    }
-}
-
-class IslandGeometryTest {
-    @Test fun pillIsCenteredOnTheCameraAndCappedByTheNarrowSide() {
-        // 1000px wide window, camera 40px wide near the right edge, density 2.
-        val g = islandGeometry(intArrayOf(900, 20, 940, 60), 1000, 2f)
-        assertEquals(920f, g.centerXPx)
-        assertEquals(20f, g.camW)
-        // Room on the narrow (right) side: (1000-920)/2 - 12 = 28dp → max width 56dp.
-        assertEquals(56f, g.maxW)
-        val event = IslandContent.Event(IslandEvent.Silent(true))
-        assertEquals(56f, g.widthFor(event))
-        // Camera spans 10..30dp: pill starts 8dp from the edge and still wraps the camera.
-        assertEquals(8f, g.top)
-        assertEquals(34f, g.pillH)
-        assertTrue(g.top <= 10f && g.top + g.pillH >= 30f)
-    }
-
-    @Test fun noCutoutCentersOnTheWindow() {
-        // A camera closer to the top than the usual gap is still covered: the island starts above it.
-        val high = islandGeometry(intArrayOf(900, 6, 940, 46), 2000, 2f)
-        assertTrue(high.top < 3f)
-        assertTrue(high.top + high.pillH >= 23f + 5f - .01f)
-        val low = islandGeometry(intArrayOf(900, 40, 940, 80), 2000, 2f)
-        assertEquals(15f, low.top)
-        val g = islandGeometry(null as IntArray?, 800, 2f)
-        assertEquals(400f, g.centerXPx)
-        assertEquals(islandWantWidth(IslandContent.Event(IslandEvent.Focus(true)), 0.dp).value, 190f)
     }
 }
 

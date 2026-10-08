@@ -77,7 +77,15 @@ internal data class WidgetPickerSession(
     val targetIndex: Int? = null,
     val candidate: WidgetPlacement? = null,
     val builtinId: Int? = null,
-)
+    val placementDragging: Boolean = false,
+    val placementGrabPoint: Offset = Offset.Zero,
+    val placementGrabBounds: androidx.compose.ui.geometry.Rect? = null,
+) {
+    fun dropIndex(index: Int): Int = placementGrabBounds?.takeIf { placementDragging }?.let { bounds ->
+        adjustedWidgetDropIndex(index, WidgetPlacement(slot, EMPTY_WIDGET, 0, 0, 0, span.width, span.height),
+            bounds, placementGrabPoint)
+    } ?: index
+}
 
 internal fun widgetCatalog(context: Context, providers: List<AppWidgetProviderInfo>, profile: AppProfile): List<WidgetCatalogEntry> {
     val pm = context.packageManager
@@ -122,6 +130,7 @@ private object WidgetPreviewCache {
 }
 
 private suspend fun loadWidgetPreview(context: Context, provider: AppWidgetProviderInfo, span: WidgetSpan): CatalogPreview {
+    if (AppSecurity.isProtected(provider.provider.packageName, provider.profile)) return CatalogPreview.Missing
     val density = context.resources.displayMetrics.densityDpi
     val key = "${provider.provider.flattenToString()}|${provider.profile.hashCode()}|$density|${span.width}x${span.height}"
     WidgetPreviewCache.get(key)?.let { return it }
@@ -168,11 +177,15 @@ private fun Drawable.catalogBitmap(): Bitmap {
 @Composable
 internal fun WidgetProviderPreview(entry: WidgetCatalogEntry, span: WidgetSpan, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val preview by produceState<CatalogPreview?>(null, entry.provider, span, context.resources.displayMetrics.densityDpi) {
-        value = loadWidgetPreview(context, entry.provider, span)
+    val protected = AppSecurity.isProtected(entry.provider.provider.packageName, entry.provider.profile)
+    val preview by produceState<CatalogPreview?>(null, entry.provider, span, context.resources.displayMetrics.densityDpi, protected) {
+        value = if (protected) null else loadWidgetPreview(context, entry.provider, span)
     }
     Box(modifier.background(Color.White.copy(alpha = .1f)), contentAlignment = Alignment.Center) {
-        when (val value = preview) {
+        if (protected) Text(stringResource(R.string.security_widget_locked),
+            modifier = Modifier.padding(FolioSpace.MEDIUM.dp), color = Color.White,
+            style = MaterialTheme.typography.bodySmall)
+        else when (val value = preview) {
             is CatalogPreview.Remote -> AndroidView(factory = { previewContext ->
                 object : android.widget.FrameLayout(previewContext) {
                     override fun dispatchTouchEvent(event: android.view.MotionEvent?): Boolean = false
@@ -227,10 +240,11 @@ internal fun VisualWidgetPicker(
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     val words = query.trim().lowercase()
-    val filtered = remember(entries, words) { entries.orEmpty().filter { entry ->
-        words.isEmpty() || listOf(entry.appLabel, entry.providerLabel, entry.description,
-            entry.provider.provider.packageName).any { it.lowercase().contains(words) }
-    } }
+    val filtered = entries.orEmpty().filter { entry ->
+        !AppSecurity.isHidden(entry.provider.provider.packageName, entry.provider.profile) &&
+            (words.isEmpty() || listOf(entry.appLabel, entry.providerLabel, entry.description,
+                entry.provider.provider.packageName).any { it.lowercase().contains(words) })
+    }
     // iOS widget gallery: dark glass, large title, search capsule, grid of preview cards grouped by app.
     val ink = Color.White
     val secondary = Color.White.copy(alpha = .6f)

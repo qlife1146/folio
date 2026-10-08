@@ -2,7 +2,11 @@ package com.mccal.folio
 
 import android.app.Application
 import android.content.ComponentName
+import android.content.pm.LauncherActivityInfo
 import android.content.pm.LauncherApps
+import android.content.pm.PackageItemInfo
+import android.content.res.Configuration
+import android.content.res.Resources
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Path
@@ -24,6 +28,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.text.BreakIterator
 import java.text.Collator
+import java.util.Locale
 
 data class AppEntry(
     val id: String,
@@ -38,6 +43,9 @@ data class AppEntry(
     val available: Boolean = true,
     /** The name Android reports, kept so a custom name can be changed or cleared without reloading apps. */
     val systemLabel: String = label,
+    val firstInstallTime: Long = 0L,
+    /** Other labels provided by the app itself, for search without changing its displayed name. */
+    val searchLabels: List<String> = emptyList(),
 ) {
     val packageName: String get() = component.packageName
     /** A pinned shortcut (a website or app action someone added to Home) rather than an app. */
@@ -105,22 +113,24 @@ data class LauncherState(
     val expanded: LayoutPreset = LayoutPreset(),
     val labels: Boolean = true,
     val verticalStatus: Boolean = true,
+    val showSystemStatusBar: Boolean = false,
     /** Mirror the side rail (dock, status, controls) to the left edge. */
     val leftHanded: Boolean = false,
     /** App ids kept out of All apps and app search (Home shortcuts are unaffected). */
     val hiddenApps: Set<String> = emptySet(),
-    /** Show the vertical island (media and live progress) in the side rail. */
+    /** Package/profile rules; authentication sessions are never persisted. */
+    val appSecurity: Map<AppSecurityKey, AppSecurityMode> = emptyMap(),
+    /** Show live activities above the dock. */
     val island: Boolean = true,
-    val islandInSpotlight: Boolean = true,
     /** Top pulls open Folio's iOS-style panels instead of the Android system shade. */
     val folioPanels: Boolean = true,
     val minPages: Int = 1,
     val statusStyle: StatusStyle = StatusStyle(),
-    val foldEffect: Boolean = true,
+    val foldEffect: Boolean = false,
     val foldIntensity: Float = 1f,
     /** Fold style: blur only (false) or iPhone Duo — still 1:1 right half plus blur (true). */
     val foldSnapshot: Boolean = false,
-    val stayAwakeOnFold: Boolean = true,
+    val stayAwakeOnFold: Boolean = false,
     /** Blur of Home behind panels and Spotlight, 0…1. */
     val panelBlur: Float = 1f,
     val notificationClock: Boolean = true,
@@ -137,7 +147,7 @@ data class LauncherState(
     /** Fades the bar when you haven't touched it for a moment. */
     val buttonBarFade: Boolean = true,
     val iconStyle: IconStyle = IconStyle.DEFAULT,
-    val standBy: Boolean = true,
+    val standBy: Boolean = false,
     /** Spotlight sections the user turned off (names of [SpotlightSection]). */
     val spotlightHidden: Set<String> = emptySet(),
     /** Engine for Enter in search: a [WebSearchTarget] name. */
@@ -164,6 +174,7 @@ data class LauncherState(
     /** Swipe down on Home (below the top edge) opens Spotlight. */
     /** Swipe down on Home: SPOTLIGHT, NOTIFICATIONS (Folio's or Android's, whichever the panels setting says) or OFF. */
     val swipeDownHome: String = "SPOTLIGHT",
+    val swipeUpHome: String = "OFF",
     /** App for messaging contacts from Spotlight: null = default texting app, or OpenBubbles/BlueBubbles. */
     val messagesApp: String? = null,
     val messagesAvoidDouble: Boolean = true,
@@ -180,8 +191,8 @@ data class LauncherState(
     val widgetStacks: Map<Int, List<Int>> = emptyMap(),
     /** Smart Rotate: stacks move to the widget that matters now. */
     val stackRotate: Boolean = true,
-    /** Live activities (music, calls, timers…) under the status in the side rail instead of at the camera. Off: the island stays on the camera. */
-    val railActivities: Boolean = false,
+    /** Expand over Home instead of increasing the live activity section's measured height. */
+    val railActivityOverlay: Boolean = false,
     /** iOS "Newly Downloaded Apps": false = App Library only (Android's way), true = also add to Home. */
     val addNewAppsToHome: Boolean = false,
     /** Beta: save Home before big changes so they can be restored (Settings › Backup › Layout History). */
@@ -204,6 +215,8 @@ data class LauncherState(
     val tintedGlass: Boolean = true,
     /** Wallpaper Tint for glass (Clear ↔ Tinted), 0–1; half is Folio's original tint. Used while [tintedGlass] is on. */
     val glassTint: Float = .5f,
+    /** Shared material for launcher backgrounds, from Liquid Glass to strong blur. */
+    val backgroundMaterial: BackgroundMaterial = BackgroundMaterial.SOFT_BLUR,
     /** Accessibility › Reduce Transparency: glass becomes nearly solid (also follows Android's high contrast). */
     val reduceTransparency: Boolean = false,
     /** Black rounded corners over Home, like the iPhone Duo concept (issue #8). */
@@ -213,8 +226,6 @@ data class LauncherState(
     /** Frost behind Home's widgets (0 = clear, 1 = solid). The Side Bar's is statusStyle.railGlass. */
     val widgetGlass: Float = .26f,
     val folderColumns: Int = 0,
-    /** Tweaks the user has added from the Tweak Library; only these show in Settings › Tweaks. */
-    val installedTweaks: Set<String> = emptySet(),
     val folderBackground: FolderBackground = FolderBackground.GLASS,
     val folderBackdropOpacity: Float = .42f,
     val labelSize: LabelSize = LabelSize.STANDARD,
@@ -239,7 +250,7 @@ data class LauncherState(
     val triggerActions: Map<String, String> = emptyMap(),
     val haptics: Boolean = true,
     /** iPhone-style cover shown when unlocking straight to Home. */
-    val lockCover: Boolean = true,
+    val lockCover: Boolean = false,
     /** Per-screen overrides for tweaks: feature id → screen → "ON"/"OFF" (absent = follow the main switch). */
     val featureScopes: Map<String, Map<String, String>> = emptyMap(),
     /** Axon-style app icon row above notifications. */
@@ -260,10 +271,6 @@ data class LauncherState(
     val appNames: Map<String, String> = emptyMap(),
     /** Per-page looks by real Home page number (pages without an entry use Home's settings). */
     val pageStyles: Map<Int, PageStyle> = emptyMap(),
-    val islandEverywhere: Boolean = false,
-    /** The island steps aside for full-screen video and games (on), and for landscape apps (off). */
-    val islandHideFullScreen: Boolean = true,
-    val islandHideLandscape: Boolean = false,
     /** Home Screen & Dock › Layout › Rows: 0 = Automatic (More rows), 4 = always four app rows. */
     val homeRows: Int = 0,
     /** App rows that last fit the cover-class and the inner-class Home (0 = not measured yet); see [homeAppRows]. */
@@ -279,6 +286,15 @@ data class LauncherState(
     /** App rows every Home page shows, the same on both screens so pages don't change when you fold. */
     val homeAppRows: Int get() = effectiveHomeRows(homeRows, homeFitCompact, homeFitExpanded)
 }
+
+/** Retired switches stay off, including settings restored from older backups. */
+internal fun LauncherState.withRetiredOptionsDisabled(): LauncherState = copy(
+    badgesWhenOpened = false, badgesSeen = emptyMap(),
+    foldEffect = false, foldSnapshot = false, standBy = false, stayAwakeOnFold = false,
+    roundedCorners = false, lockCover = false, dockEverywhere = false, buttonBar = false,
+    featureScopes = featureScopes - setOf("badgesWhenOpened", "foldEffect", "foldSnapshot", "standBy",
+        "stayAwakeOnFold", "roundedCorners", "lockCover", "dockEverywhere", "buttonBar"),
+)
 
 /**
  * Automatic: the fewest rows any of this device's screens has room for (screens not measured yet don't count, and
@@ -301,8 +317,6 @@ const val MORE_ROWS_SCHEMA = 9
 class LauncherModel(application: Application) : AndroidViewModel(application) {
     private data class RefreshedApps(val entries: List<AppEntry>, val profiles: List<AppProfile>,
         val authoritativeProfiles: Set<Long>, val removedProfiles: Set<Long>)
-    private data class UndoImportSettings(val compact: LayoutPreset, val expanded: LayoutPreset, val labels: Boolean,
-        val googleSearch: Boolean, val verticalStatus: Boolean)
     private val prefs = application.getSharedPreferences("launcher", 0)
     private val launcherApps = application.getSystemService(LauncherApps::class.java)
     private val userManager = application.getSystemService(UserManager::class.java)
@@ -314,7 +328,7 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
     private val mutable = MutableStateFlow(load())
     val state = mutable.asStateFlow()
     private var undoLayout: Pair<HomeLayout, HomeLayout>? = null
-    private var undoImportSettings: UndoImportSettings? = null
+    private var undoImportSettings: LauncherState? = null
     private var refreshing = false
     private var refreshPending = false
     private val invalidatedPackages = mutableSetOf<Pair<Long, String>>()
@@ -409,6 +423,28 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
                     } == true }
                     val collator = Collator.getInstance()
                     val application = getApplication<Application>()
+                    val labelConfigurations = listOf(Locale.KOREAN, Locale.ENGLISH).associateWith { locale ->
+                        Configuration(resources.configuration).apply { setLocale(locale) }
+                    }
+                    val labelResources = mutableMapOf<Triple<String, Long, Locale>, Resources?>()
+                    fun localizedLabels(info: LauncherActivityInfo, serial: Long): List<String> = runCatching {
+                        val items = listOf<PackageItemInfo>(info.activityInfo, info.applicationInfo)
+                        val names = linkedSetOf<String>()
+                        items.forEach { item -> item.nonLocalizedLabel?.toString()?.trim()?.takeIf { it.isNotBlank() }?.let(names::add) }
+                        if (items.any { it.labelRes != 0 }) labelConfigurations.forEach { (locale, config) ->
+                            val key = Triple(info.componentName.packageName, serial, locale)
+                            if (key !in labelResources) labelResources[key] = runCatching {
+                                application.packageManager.getResourcesForApplication(info.applicationInfo, config)
+                            }.getOrNull()
+                            labelResources[key]?.let { localized ->
+                                items.filter { it.labelRes != 0 }.forEach { item ->
+                                    runCatching { localized.getText(item.labelRes).toString().trim() }.getOrNull()
+                                        ?.takeIf { it.isNotBlank() }?.let(names::add)
+                                }
+                            }
+                        }
+                        names.toList()
+                    }.getOrDefault(emptyList())
                     val personal = Process.myUserHandle()
                     val personalSerial = userManager.getSerialNumberForUser(personal)
                     val associatedSerials = userManager.userProfiles.mapTo(mutableSetOf(), userManager::getSerialNumberForUser)
@@ -449,7 +485,9 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
                             iconCache[id]?.takeIf { it.label == label && it.available && it.component == component } ?: run {
                                 val icon = runCatching { info.getBadgedIcon(0) }.getOrElse { application.packageManager.defaultActivityIcon }
                                 AppEntry(id, label, launcherIcon(icon), component, profile, serial, descriptor.label,
-                                    descriptor.isWork, available = true).also { iconCache[id] = it }
+                                    descriptor.isWork, available = true,
+                                    firstInstallTime = runCatching { info.firstInstallTime }.getOrDefault(0L),
+                                    searchLabels = localizedLabels(info, serial).filter { it != label }).also { iconCache[id] = it }
                             }
                         }
                     }
@@ -489,8 +527,13 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
                     val entries = (live + unavailable).distinctBy(AppEntry::id)
                         .sortedWith { a, b -> collator.compare(a.label, b.label) }
                     saveCachedApps(entries)
-                    // Spell Chinese names in pinyin here, off the main thread, so search and the A–Z list don't wait.
-                    entries.forEach { Pinyin.syllables(it.label) }
+                    // Prepare alternate spellings off the main thread, before search needs them.
+                    entries.forEach { app ->
+                        (listOf(app.label, app.systemLabel) + app.searchLabels).distinct().forEach { name ->
+                            Pinyin.syllables(name)
+                            AppPronunciation.prepare(name)
+                        }
+                    }
                     iconCache.keys.retainAll(entries.map { it.id }.toSet())
                     RefreshedApps(entries, (profiles + unavailable.map { AppProfile(it.userSerial, it.profileLabel, false, true,
                         quiet = true, unlocked = false, available = false) }).distinctBy(AppProfile::userSerial),
@@ -567,14 +610,16 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
             val baseIcon = application.packageManager.defaultActivityIcon
             val icon = runCatching { application.packageManager.getUserBadgedIcon(baseIcon, user) }.getOrDefault(baseIcon)
             AppEntry(id, item.getString("label"), launcherIcon(icon), component, user, serial,
-                item.optString("profile", if (isWork) "Work" else "Personal"), isWork, available = false)
+                item.optString("profile", if (isWork) "Work" else "Personal"), isWork, available = false,
+                firstInstallTime = item.optLong("firstInstallTime", 0L))
         }
     }.getOrDefault(emptyList())
 
     private fun saveCachedApps(apps: List<AppEntry>) {
         val array = JSONArray().also { result -> apps.forEach { app -> result.put(JSONObject()
             .put("id", app.id).put("label", app.label).put("serial", app.userSerial)
-            .put("profile", app.profileLabel).put("work", app.isWork)) } }
+            .put("profile", app.profileLabel).put("work", app.isWork)
+            .put("firstInstallTime", app.firstInstallTime)) } }
         appCatalogPrefs.edit().putString("apps", array.toString()).apply()
     }
 
@@ -612,6 +657,7 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
 
     fun setPinned(id: String, pinned: Boolean) {
         if (statePayloadInvalid) return
+        if (pinned && isSecurityHidden(mutable.value, id)) return
         if (mutable.value.folders.any { id in it.appIds }) return
         mutable.update { old ->
             val enable = pinned && old.apps.any { it.id == id }
@@ -631,6 +677,7 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
 
     fun setDock(slot: Int, id: String?) {
         if (statePayloadInvalid) return
+        if (id != null && isSecurityHidden(mutable.value, id)) return
         if (slot !in mutable.value.dock.indices) return
         if (id != null && (isReservedFolderId(id) || mutable.value.folders.any { id in it.appIds })) return
         mutable.update { old -> old.copy(canUndoEdit = false,
@@ -654,16 +701,18 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
         applyDrop(id, DropTarget.Home(target.coerceIn(range)))
     }
 
-    fun applyDrop(id: String, target: DropTarget): Boolean {
+    fun applyDrop(id: String, target: DropTarget, direction: HomePushDirection? = null): Boolean {
         val old = mutable.value
+        if (isSecurityHidden(old, id)) return false
         val folder = old.layout.folder(id)
         if (old.apps.none { it.id == id } && folder == null) return false
         if (target is DropTarget.Folder) return folder == null && addAppToFolder(target.id, id)
         if (folder != null && target !is DropTarget.Home) return false
-        return commitLayout(dropApp(old.layout, id, target, old.homeAppRows))
+        return commitLayout(dropApp(old.layout, id, target, old.homeAppRows, direction))
     }
 
     fun createFolder(firstAppId: String, secondAppId: String, targetIndex: Int, title: String = "Folder"): String? {
+        if (isSecurityHidden(mutable.value, firstAppId) || isSecurityHidden(mutable.value, secondAppId)) return null
         val installed = mutable.value.apps.mapTo(mutableSetOf(), AppEntry::id)
         if (firstAppId !in installed || secondAppId !in installed) return null
         val id = newFolderId()
@@ -672,43 +721,45 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
     }
     fun renameFolder(folderId: String, title: String) = commitLayout(com.mccal.folio.renameFolder(mutable.value.layout, folderId, title))
     fun addAppToFolder(folderId: String, appId: String, index: Int? = null): Boolean {
+        if (isSecurityHidden(mutable.value, appId)) return false
         if (mutable.value.apps.none { it.id == appId }) return false
         return commitLayout(com.mccal.folio.addAppToFolder(mutable.value.layout, folderId, appId, index))
     }
-    fun removeAppFromFolder(folderId: String, appId: String, target: DropTarget) =
-        commitLayout(com.mccal.folio.removeAppFromFolder(mutable.value.layout, folderId, appId, target, mutable.value.homeAppRows))
+    fun removeAppFromFolder(folderId: String, appId: String, target: DropTarget, direction: HomePushDirection? = null) =
+        commitLayout(com.mccal.folio.removeAppFromFolder(mutable.value.layout, folderId, appId, target, mutable.value.homeAppRows, direction))
     fun setFolderApps(folderId: String, appIds: List<String>): Boolean {
         val old = mutable.value
         val installed = old.apps.mapTo(mutableSetOf(), AppEntry::id)
-        return commitLayout(com.mccal.folio.setFolderApps(old.layout, folderId, appIds.filter { it in installed }))
+        return commitLayout(com.mccal.folio.setFolderApps(old.layout, folderId,
+            appIds.filter { it in installed && !isSecurityHidden(old, it) }))
     }
     fun moveFolderApp(folderId: String, appId: String, index: Int) =
         commitLayout(com.mccal.folio.moveFolderApp(mutable.value.layout, folderId, appId, index))
     fun folder(id: String) = mutable.value.layout.folder(id)
 
-    /**
-     * [before] is the Home the user had when they chose to restore. It differs from the current state when the Market
-     * has already taken this phone's packages off, and it is what Layout History and Undo should give back.
-     */
-    fun applyImportedLayout(preview: LayoutImportPreview, before: LauncherState? = null): Boolean {
+    /** Restores a backup while keeping the previous Home available to Layout History and Undo. */
+    fun applyImportedLayout(preview: LayoutImportPreview): Boolean {
         if (statePayloadInvalid) return false
         val old = mutable.value
-        val kept = before ?: old
-        if (old.layout == preview.layout && old.compact == preview.compact && old.expanded == preview.expanded &&
-            old.labels == preview.labels && old.googleSearch == preview.googleSearch && old.verticalStatus == preview.verticalStatus &&
-            old.appNames + preview.appNames == old.appNames) return false
-        if (old.layoutHistory && !old.loading) LayoutHistory.add(getApplication(), "Before restoring a backup", kept.layout)
-        undoLayout = kept.layout to preview.layout
-        undoImportSettings = UndoImportSettings(kept.compact, kept.expanded, kept.labels, kept.googleSearch, kept.verticalStatus)
+        val settings = preview.settings ?: old
         // A restored name replaces the one on this phone; names this backup says nothing about are left alone.
         val names = old.appNames + preview.appNames
-        mutable.value = old.copy(appNames = names, apps = old.apps.withAppNames(names),
+        val restored = secureState(settings.copy(appSecurity = mergeAppSecurity(old.appSecurity, settings.appSecurity),
+            appNames = names, apps = old.apps.withAppNames(names), profiles = old.profiles,
             homeSlots = preview.layout.slots, leadingSlots = preview.layout.leadingSlots, dock = preview.layout.dock,
             widgetPlacements = preview.layout.widgetPlacements, folders = preview.layout.folders,
             widgetRestores = preview.layout.widgetRestores, compact = preview.compact, expanded = preview.expanded,
-            widgetStacks = WidgetStacks.prune(old.widgetStacks, old.widgetPlacements.map { it.slot }.toSet()),
+            widgetStacks = if (preview.settings != null) emptyMap() else WidgetStacks.prune(old.widgetStacks,
+                preview.layout.widgetPlacements.filter { it in old.widgetPlacements }.map { it.slot }.toSet()),
+            badgesSeen = old.badgesSeen, homeFitCompact = old.homeFitCompact, homeFitExpanded = old.homeFitExpanded,
+            loading = old.loading, error = old.error, editRevision = old.editRevision, canUndoEdit = old.canUndoEdit,
             labels = preview.labels, googleSearch = preview.googleSearch, verticalStatus = preview.verticalStatus,
-            editRevision = old.editRevision + 1, canUndoEdit = true)
+        ))
+        if (old == restored) return false
+        if (old.layoutHistory && !old.loading) LayoutHistory.add(getApplication(), "Before restoring a backup", old.layout)
+        undoLayout = old.layout to restored.layout
+        undoImportSettings = old
+        mutable.value = restored.copy(editRevision = old.editRevision + 1, canUndoEdit = true)
         persist()
         return true
     }
@@ -717,9 +768,12 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
         val target = mutable.value.layout.placement(to) ?: return false
         return moveWidgetTo(from, target.page * HOME_CELLS + target.row * GRID_COLUMNS + target.column)
     }
-    fun moveWidgetTo(slot: Int, index: Int) = commitLayout(moveWidget(mutable.value.layout, slot, index, mutable.value.homeAppRows))
-    fun resizeWidget(slot: Int, spanX: Int, spanY: Int) = commitLayout(resizeWidget(mutable.value.layout, slot, spanX, spanY))
-    fun placeWidget(placement: WidgetPlacement) = commitLayout(placeWidget(mutable.value.layout, placement))
+    fun moveWidgetTo(slot: Int, index: Int, direction: HomePushDirection? = null) =
+        commitLayout(moveWidget(mutable.value.layout, slot, index, mutable.value.homeAppRows, direction))
+    fun resizeWidget(slot: Int, spanX: Int, spanY: Int) = commitLayout(resizeWidget(mutable.value.layout, slot, spanX, spanY,
+        mutable.value.homeAppRows))
+    fun placeWidget(placement: WidgetPlacement) = commitLayout(placeWidget(mutable.value.layout, placement,
+        rearrange = true, appRows = mutable.value.homeAppRows))
     fun placement(slot: Int) = mutable.value.layout.placement(slot)
     // Never reuse a slot number that a (possibly undoable) stack still refers to.
     fun nextWidgetSlot() = maxOf(mutable.value.widgetPlacements.maxOfOrNull { it.slot } ?: -1,
@@ -758,21 +812,14 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setStackRotate(value: Boolean) = updateSettings(soon = false) { it.copy(stackRotate = value) }
-    fun setRailActivities(value: Boolean) = updateSettings(soon = false) { it.copy(railActivities = value) }
-    /** The look before the last theme was applied, so Undo can put it back. */
-    var themeUndo: FolioTheme? = null
-        private set
-    fun applyTheme(theme: FolioTheme) {
-        themeUndo = FolioTheme.of(mutable.value, "Previous")
-        val packs = IconPacks.installed(getApplication()).mapTo(mutableSetOf()) { it.packageName }
-        updateSettings(soon = false) { it.withTheme(theme, packs) }
-    }
-    fun undoTheme() { themeUndo?.let { previous -> themeUndo = null; val packs = IconPacks.installed(getApplication()).mapTo(mutableSetOf()) { it.packageName }
-        updateSettings(soon = false) { it.withTheme(previous, packs) } } }
+    fun setRailActivityOverlay(value: Boolean) = updateSettings(soon = false) { it.copy(railActivityOverlay = value) }
     fun setPageStyle(page: Int, style: PageStyle) = updateSettings(soon = false) {
         it.copy(pageStyles = if (style.isDefault) it.pageStyles - page else it.pageStyles + (page to style))
     }
-    fun toggleStackApp(anchor: String, app: String) = updateSettings(soon = false) { it.copy(iconStacks = IconStacks.toggle(it.iconStacks, anchor, app)) }
+    fun toggleStackApp(anchor: String, app: String) {
+        if (isSecurityHidden(mutable.value, anchor) || isSecurityHidden(mutable.value, app)) return
+        updateSettings(soon = false) { it.copy(iconStacks = IconStacks.toggle(it.iconStacks, anchor, app)) }
+    }
     fun setAddNewAppsToHome(value: Boolean) = updateSettings(soon = false) { it.copy(addNewAppsToHome = value) }
     fun setLayoutHistory(value: Boolean) = updateSettings(soon = false) { it.copy(layoutHistory = value) }
     fun setDockRecentDots(value: Boolean) = updateSettings(soon = false) { it.copy(dockRecentDots = value) }
@@ -800,7 +847,7 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
         val removed = removedAppIds(savedIds, old.apps.mapTo(mutableSetOf(), AppEntry::id),
             old.profiles.filter { it.available }.mapTo(mutableSetOf(), AppProfile::userSerial), emptySet(), emptySet(),
             userManager.getSerialNumberForUser(Process.myUserHandle()))
-        val next = reconcileFolders(before.copy(widgetPlacements = widgets), removed)
+        val next = secureLayout(old, reconcileFolders(before.copy(widgetPlacements = widgets), removed))
         if (old.layout == next) return false
         undoLayout = old.layout to next
         undoImportSettings = null
@@ -836,47 +883,23 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
     fun setTintedGlass(value: Boolean) = updateSettings(soon = false) { it.copy(tintedGlass = value) }
     /** One slider for both: all the way to Clear turns tinting off. */
     fun setGlassTint(value: Float) = updateSettings(soon = true) { it.copy(tintedGlass = value > .01f, glassTint = if (value > .01f) value.coerceIn(0f, 1f) else it.glassTint) }
+    fun setBackgroundMaterial(value: BackgroundMaterial) = updateSettings(soon = false) { it.copy(backgroundMaterial = value) }
     fun setReduceTransparency(value: Boolean) = updateSettings(soon = false) { it.copy(reduceTransparency = value) }
     fun setRoundedCorners(value: Boolean) = updateSettings(soon = false) { it.copy(roundedCorners = value) }
     fun setCornerRadius(value: Float) = updateSettings(soon = true) { it.copy(cornerRadius = value.coerceIn(16f, 72f)) }
-    fun setWidgetGlass(value: Float) = updateSettings(soon = true) { it.copy(widgetGlass = value.coerceIn(0f, 1f)) }
     fun setFolderColumns(value: Int) = updateSettings(soon = false) { it.copy(folderColumns = value.takeIf { v -> v in setOf(0, 3, 4) } ?: 0) }
-    fun setFolderBackground(value: FolderBackground) = updateSettings(soon = false) { it.copy(folderBackground = value) }
-    fun setFolderBackdropOpacity(value: Float) = updateSettings(soon = true) { it.copy(folderBackdropOpacity = value.coerceIn(0f, 1f)) }
     fun setLabelSize(value: LabelSize) = updateSettings(soon = false) { it.copy(labelSize = value) }
     fun setMotionSpeed(value: MotionSpeed) = updateSettings(soon = false) { it.copy(motionSpeed = value) }
     fun setPageEffect(value: PageEffect) = updateSettings(soon = false) { it.copy(pageEffect = value) }
-    fun setGlassOutline(value: Float) = updateSettings(soon = true) { it.copy(glassOutline = value.coerceIn(0f, 1f)) }
-    /** One tap for the whole glass look: widgets and Side Bar together. */
-    fun setGlassPreset(frost: Float) = updateSettings(soon = false) {
-        it.copy(widgetGlass = frost, statusStyle = it.statusStyle.copy(railGlass = frost)) }
     fun setDimWallpaperDark(value: Boolean) = updateSettings(soon = false) { it.copy(dimWallpaperDark = value) }
     fun setIconTintFromWallpaper(value: Boolean) = updateSettings(soon = false) { it.copy(iconTintFromWallpaper = value) }
-    fun setTintNotifications(value: Boolean) = updateSettings(soon = false) { it.copy(tintNotifications = value) }
-    fun setTintMedia(value: Boolean) = updateSettings(soon = false) { it.copy(tintMedia = value) }
-    fun setDockMagnify(value: Boolean) = updateSettings(soon = false) { it.copy(dockMagnify = value) }
-    fun setAppPanels(value: Boolean) = updateSettings(soon = false) { it.copy(appPanels = value) }
+    fun setTintNotifications(value: Boolean) = updateSettings(soon = false) { it.copy(tintNotifications = value, featureScopes = it.featureScopes - "tintNotifications") }
+    fun setTintMedia(value: Boolean) = updateSettings(soon = false) { it.copy(tintMedia = value, featureScopes = it.featureScopes - "tintMedia") }
+    fun setDockMagnify(value: Boolean) = updateSettings(soon = false) { it.copy(dockMagnify = value, featureScopes = it.featureScopes - "dockMagnify") }
+    fun setAppPanels(value: Boolean) = updateSettings(soon = false) { it.copy(appPanels = value, featureScopes = it.featureScopes - "appPanels") }
     fun setHaptics(value: Boolean) = updateSettings(soon = false) { it.copy(haptics = value) }
     fun setLockCover(value: Boolean) = updateSettings(soon = false) { it.copy(lockCover = value) }
-    fun setFeatureScope(id: String, screen: FolioScreen, value: ScopeValue) =
-        updateSettings(soon = false) { it.copy(featureScopes = FeatureScopes.set(it.featureScopes, id, screen, value)) }
-    /** Tweak Library "Get": adds the tweak to Settings and turns it on. */
-    internal fun installTweak(feature: TweakFeature) {
-        updateSettings(soon = false) { it.copy(installedTweaks = it.installedTweaks + feature.id) }
-        feature.set(this, true)
-    }
-
-    /** "Remove": turns the tweak off, clears its per-screen settings and takes it out of Settings. */
-    internal fun removeTweak(feature: TweakFeature) {
-        feature.set(this, false)
-        updateSettings(soon = false) { it.copy(installedTweaks = it.installedTweaks - feature.id, featureScopes = it.featureScopes - feature.id) }
-    }
-
-    internal fun resetTweak(feature: TweakFeature) {
-        feature.set(this, feature.default)
-        updateSettings(soon = false) { it.copy(featureScopes = it.featureScopes - feature.id) }
-    }
-    fun setNotificationAppRow(value: Boolean) = updateSettings(soon = false) { it.copy(notificationAppRow = value) }
+    fun setNotificationAppRow(value: Boolean) = updateSettings(soon = false) { it.copy(notificationAppRow = value, featureScopes = it.featureScopes - "notificationAppRow") }
     fun setPageScrub(value: Boolean) = updateSettings(soon = false) { it.copy(pageScrub = value) }
     fun setWallpaperMotion(value: Boolean) = updateSettings(soon = false) { it.copy(wallpaperMotion = value) }
     fun setLiveIcons(value: Boolean) = updateSettings(soon = false) { it.copy(liveIcons = value) }
@@ -884,13 +907,27 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
     fun setTriggerAction(trigger: FolioTrigger, action: FolioAction) = updateSettings(soon = false) {
         it.copy(triggerActions = if (action == FolioAction.NONE) it.triggerActions - trigger.name else it.triggerActions + (trigger.name to action.name))
     }
-    fun addTodayWidget(id: Int, size: TodaySize): Boolean {
+    fun addTodayWidget(id: Int, size: TodaySize, span: WidgetSpan? = null): Boolean {
         if (statePayloadInvalid) return false
-        updateSettings(soon = false) { it.copy(todayWidgets = TodayWidgets.add(it.todayWidgets, TodayWidget(id, size))) }
+        updateSettings(soon = false) { it.copy(todayWidgets = TodayWidgets.add(it.todayWidgets, TodayWidget(id, size, span))) }
+        return true
+    }
+    fun replaceTodayWidget(oldId: Int, id: Int, size: TodaySize, span: WidgetSpan? = null): Boolean {
+        val widgets = state.value.todayWidgets
+        if (statePayloadInvalid || widgets.none { it.id == oldId } || (id != oldId && widgets.any { it.id == id })) return false
+        updateSettings(soon = false) { current -> current.copy(todayWidgets = current.todayWidgets.map {
+            if (it.id == oldId) TodayWidget(id, size, span) else it
+        }) }
         return true
     }
     fun removeTodayWidget(id: Int) = updateSettings(soon = false) { it.copy(todayWidgets = TodayWidgets.remove(it.todayWidgets, id)) }
     fun moveTodayWidget(id: Int, delta: Int) = updateSettings(soon = false) { it.copy(todayWidgets = TodayWidgets.move(it.todayWidgets, id, delta)) }
+    fun resizeTodayWidget(id: Int, span: WidgetSpan) {
+        if (span.width !in 1..GRID_COLUMNS || span.height !in 1..GRID_ROWS) return
+        updateSettings(soon = false) { state -> state.copy(todayWidgets = state.todayWidgets.map { widget ->
+            if (widget.id == id) widget.copy(size = TodaySize.forSpan(span.width, span.height), span = span) else widget
+        }) }
+    }
     fun removePlacement(source: DropTarget) = commitLayout(removePlacement(mutable.value.layout, source))
     /** Arranges Home's first page and dock like iPhone's with the matching installed apps (undoable). */
     fun arrangeLikeIPhone(): Boolean {
@@ -898,11 +935,12 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
         val state = mutable.value
         return commitLayout(arrangeLikeIPhone(state.layout, resolveIPhoneApps(getApplication(), state.apps, state.messagesApp), state.homeAppRows))
     }
-    private fun commitLayout(next: HomeLayout): Boolean {
+    private fun commitLayout(layout: HomeLayout): Boolean {
         if (statePayloadInvalid) return false
         // A Focus hiding Home pages locks editing: Home shows a filtered copy, so its positions aren't the real ones.
         if (FocusPages.lockingFocus(mutable.value) != null) return false
         val old = mutable.value
+        val next = secureLayout(old, layout)
         if (old.layout == next) return false
         undoLayout = old.layout to next
         undoImportSettings = null
@@ -922,15 +960,20 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
         if (!old.canUndoEdit || old.layout != after) return false
         val installed = (old.apps.map { it.id } + before.folders.map { it.id }).toSet()
         val settings = undoImportSettings
-        mutable.value = old.copy(homeSlots = reconcileHomeSlots(before.slots, installed),
+        val restoredSettings = settings ?: old
+        mutable.value = secureState(restoredSettings.copy(appSecurity = old.appSecurity,
+            apps = old.apps.withAppNames(restoredSettings.appNames), profiles = old.profiles,
+            loading = old.loading, error = old.error, homeFitCompact = old.homeFitCompact, homeFitExpanded = old.homeFitExpanded,
+            badgesSeen = old.badgesSeen, homeSlots = reconcileHomeSlots(before.slots, installed),
             leadingSlots = before.leadingSlots.map { it?.takeIf(installed::contains) },
             dock = before.dock.map { it?.takeIf(installed::contains) }, widgetPlacements = before.widgetPlacements, folders = before.folders,
-            widgetStacks = WidgetStacks.prune(old.widgetStacks, before.widgetPlacements.map { it.slot }.toSet()),
+            minPages = before.minPages,
+            widgetStacks = WidgetStacks.prune(restoredSettings.widgetStacks, before.widgetPlacements.map { it.slot }.toSet()),
             widgetRestores = before.widgetRestores, compact = settings?.compact ?: old.compact,
             expanded = settings?.expanded ?: old.expanded, labels = settings?.labels ?: old.labels,
             googleSearch = settings?.googleSearch ?: old.googleSearch, verticalStatus = settings?.verticalStatus ?: old.verticalStatus,
             canUndoEdit = false,
-            editRevision = old.editRevision + 1)
+            editRevision = old.editRevision + 1))
         undoLayout = null
         undoImportSettings = null
         persist()
@@ -974,6 +1017,7 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
         if (trimmed != seen) updateSettings(soon = true) { it.copy(badgesSeen = trimmed) }
     }
     fun setSearchPill(value: Boolean) = updateSettings(soon = false) { it.copy(searchPill = value) }
+    fun setSwipeUpHome(value: String) = updateSettings(soon = false) { it.copy(swipeUpHome = value) }
     fun setSwipeDownHome(value: String) = updateSettings(soon = false) { it.copy(swipeDownHome = value) }
     fun setMessagesApp(pkg: String?) = updateSettings(soon = false) { it.copy(messagesApp = pkg) }
     fun setMessagesAvoidDouble(value: Boolean) = updateSettings(soon = false) { it.copy(messagesAvoidDouble = value) }
@@ -994,9 +1038,6 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
     fun setButtonBarFade(value: Boolean) = updateSettings(soon = false) { it.copy(buttonBarFade = value) }
 
     fun setDockEverywhere(value: Boolean) = updateSettings(soon = false) { it.copy(dockEverywhere = value) }
-    fun setIslandEverywhere(value: Boolean) = updateSettings(soon = false) { it.copy(islandEverywhere = value) }
-    fun setIslandHideFullScreen(value: Boolean) = updateSettings(soon = false) { it.copy(islandHideFullScreen = value) }
-    fun setIslandHideLandscape(value: Boolean) = updateSettings(soon = false) { it.copy(islandHideLandscape = value) }
     fun setHomeRows(value: Int) = updateSettings(soon = false) { it.copy(homeRows = if (value == BASE_APP_ROWS) value else 0) }
     /** Remembers how many app rows fit this screen class's full-screen Home (see [effectiveHomeRows]). */
     fun recordHomeFit(expanded: Boolean, rows: Int) {
@@ -1005,7 +1046,6 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
         if ((if (expanded) old.homeFitExpanded else old.homeFitCompact) == value) return
         updateSettings(soon = false) { if (expanded) it.copy(homeFitExpanded = value) else it.copy(homeFitCompact = value) }
     }
-    fun setPanelBlur(value: Float) = updateSettings(soon = true) { it.copy(panelBlur = value) }
     fun setNotificationClock(value: Boolean) = updateSettings(soon = false) { it.copy(notificationClock = value) }
     fun setGroupNotifications(value: Boolean) = updateSettings(soon = false) { it.copy(groupNotifications = value) }
     fun setFoldEffect(value: Boolean) = updateSettings(soon = false) { it.copy(foldEffect = value) }
@@ -1014,14 +1054,56 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
     fun setStatusStyle(style: StatusStyle) = updateSettings(soon = true) { it.copy(statusStyle = style) }
     fun setFolioPanels(value: Boolean) = updateSettings(soon = false) { it.copy(folioPanels = value) }
     fun setIsland(value: Boolean) = updateSettings(soon = false) { it.copy(island = value) }
-    fun setIslandInSpotlight(value: Boolean) = updateSettings(soon = false) { it.copy(islandInSpotlight = value) }
     fun setHidden(id: String, hidden: Boolean) = updateSettings(soon = false) { it.copy(hiddenApps = if (hidden) it.hiddenApps + id else it.hiddenApps - id) }
+
+    /** Called after system authentication succeeds; hiding cannot be undone by layout history. */
+    fun setAppSecurity(app: AppEntry, mode: AppSecurityMode?) {
+        if (statePayloadInvalid) return
+        val old = mutable.value
+        val key = AppSecurity.key(app)
+        val rules = if (mode == null) old.appSecurity - key else old.appSecurity + (key to mode)
+        if (rules == old.appSecurity) return
+        undoLayout = null
+        undoImportSettings = null
+        mutable.value = secureState(old.copy(appSecurity = rules, canUndoEdit = false, editRevision = old.editRevision + 1))
+        persist()
+    }
+
+    private fun isSecurityHidden(state: LauncherState, id: String): Boolean {
+        val app = state.apps.firstOrNull { it.id == id }
+        val identity = if (app == null) parseProfileAppId(id) else null
+        val component = identity?.component?.let(ComponentName::unflattenFromString)
+        val key = app?.let(AppSecurity::key) ?: identity?.let { parsed ->
+            component?.packageName?.let { packageName ->
+                AppSecurityKey(packageName, parsed.userSerial ?: userManager.getSerialNumberForUser(Process.myUserHandle()))
+            }
+        }
+        val mode = key?.let(state.appSecurity::get) ?: return false
+        val shortcut = app?.isShortcut ?: (component?.className?.startsWith(SHORTCUT_CLASS_PREFIX) == true)
+        return mode == AppSecurityMode.HIDDEN || shortcut
+    }
+
+    private fun secureLayout(state: LauncherState, layout: HomeLayout): HomeLayout {
+        if (state.appSecurity.isEmpty()) return layout
+        val ids = layout.slots.filterNotNull() + layout.leadingSlots.filterNotNull() + layout.dock.filterNotNull() +
+            layout.folders.flatMap(FolderEntry::appIds)
+        return reconcileFolders(layout, ids.filterTo(mutableSetOf()) { isSecurityHidden(state, it) })
+    }
+
+    private fun secureState(state: LauncherState): LauncherState {
+        val layout = secureLayout(state, state.layout)
+        val stacks = state.iconStacks.filterKeys { !isSecurityHidden(state, it) }
+            .mapValues { (_, ids) -> ids.filterNot { isSecurityHidden(state, it) } }.filterValues { it.isNotEmpty() }
+        return state.copy(homeSlots = layout.slots, leadingSlots = layout.leadingSlots, dock = layout.dock,
+            folders = layout.folders, iconStacks = stacks).withRetiredOptionsDisabled()
+    }
     /** Renames one app everywhere it appears; a blank name puts the name Android reports back. */
     fun renameApp(id: String, name: String) = updateSettings(soon = false) { s ->
         val names = editAppName(s.appNames, id, name)
         s.copy(appNames = names, apps = s.apps.withAppNames(names))
     }
     fun setLeftHanded(value: Boolean) = updateSettings(soon = false) { it.copy(leftHanded = value) }
+    fun setShowSystemStatusBar(value: Boolean) = updateSettings(soon = false) { it.copy(showSystemStatusBar = value) }
     fun setVerticalStatus(value: Boolean) { if (statePayloadInvalid) return; undoLayout = null; undoImportSettings = null; mutable.update { it.copy(verticalStatus = value, canUndoEdit = false) }; persist() }
     fun setGoogleSearch(value: Boolean) { if (statePayloadInvalid) return; undoLayout = null; undoImportSettings = null; mutable.update { it.copy(googleSearch = value, canUndoEdit = false) }; persist() }
     fun setPreset(expanded: Boolean, value: LayoutPreset) {
@@ -1073,7 +1155,7 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
     /** Appearance/behaviour settings: no-op while the saved state is unreadable, then saved. */
     private inline fun updateSettings(soon: Boolean, change: (LauncherState) -> LauncherState) {
         if (statePayloadInvalid) return
-        mutable.update(change)
+        mutable.update { change(it).withRetiredOptionsDisabled() }
         if (soon) persistSoon() else persist()
     }
 
@@ -1103,71 +1185,9 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
 
     private fun persist() {
         if (needsMigration || statePayloadInvalid) return
+        mutable.update(::secureState)
         val s = mutable.value
-        fun preset(p: LayoutPreset) = JSONObject().put("iconSize", p.iconSize).put("rowGap", p.rowGap)
-            .put("dockWidth", p.dockWidth).put("dockPosition", p.dockPosition).put("dockAlignToGrid", p.dockAlignToGrid)
-            .put("dockPlacement", p.dockPlacement.name).put("statusAlignToGrid", p.statusAlignToGrid).put("statusPosition", p.statusPosition)
-            .put("columnGap", p.columnGap).put("dockSpacing", p.dockSpacing).put("widgetScale", p.widgetScale).put("pageTop", p.pageTop)
-        val widgets = JSONArray().also { array -> s.widgetPlacements.forEach { w -> array.put(JSONObject()
-            .put("slot", w.slot).put("id", w.id).put("page", w.page).put("column", w.column).put("row", w.row)
-            .put("spanX", w.spanX).put("spanY", w.spanY)) } }
-        val folders = JSONArray().also { array -> s.folders.forEach { folder -> array.put(JSONObject()
-            .put("id", folder.id).put("title", folder.title).put("apps", JSONArray(folder.appIds))) } }
-        val restores = JSONArray().also { array -> s.widgetRestores.forEach { restore -> array.put(JSONObject()
-            .put("slot", restore.slot).put("provider", restore.providerComponent).put("userSerial", restore.userSerial)
-            .put("title", restore.title).put("profileLabel", restore.profileLabel).put("work", restore.isWork)
-            .put("sourceScope", restore.sourceScope)) } }
-        val data = JSONObject().put("schema", STATE_SCHEMA).put("pinned", JSONArray(s.order)).put("homeSlots", JSONArray(s.homeSlots))
-            .put("leadingSlots", JSONArray(s.leadingSlots)).put("dock", JSONArray(s.dock))
-            .put("widgets", widgets).put("labels", s.labels)
-            .put("folders", folders)
-            .put("restores", restores)
-            .put("googleSearch", s.googleSearch)
-            .put("verticalStatus", s.verticalStatus)
-            .put(SettingKeys.LEFT_HANDED, s.leftHanded)
-            .put("hiddenApps", JSONArray(s.hiddenApps.toList()))
-            .put("island", s.island)
-            .put("islandInSpotlight", s.islandInSpotlight)
-            .put("folioPanels", s.folioPanels)
-            .put("minPages", s.minPages)
-            .put("statusStyle", s.statusStyle.toJson())
-            .put("foldEffect", s.foldEffect).put("foldSnapshot", s.foldSnapshot).put("foldIntensity", s.foldIntensity.toDouble()).put("stayAwakeOnFold", s.stayAwakeOnFold)
-            .put("panelBlur", s.panelBlur.toDouble()).put("notificationClock", s.notificationClock).put("groupNotifications", s.groupNotifications)
-            .put("standBy", s.standBy).put("spotlightHidden", JSONArray(s.spotlightHidden.toList())).put("searchEngine", s.searchEngine)
-            .put(SettingKeys.ISLAND_EVENTS_OFF, JSONArray(s.islandEventsOff.toList())).put("libraryCategories", s.libraryCategories).put("libraryWork", s.libraryWork).put("iconStyle", s.iconStyle.name).put("iconTint", s.iconTint)
-            .put("iconShape", s.iconShape.name).put("iconPack", s.iconPack ?: JSONObject.NULL).put("badgeStyle", s.badgeStyle.name).put("badgeColor", s.badgeColor.name).put("badgeLook", s.badgeLook.name).put("badgeSize", s.badgeSize.name).put("badgesWhenOpened", s.badgesWhenOpened)
-            .put("badgesSeen", JSONObject().apply { s.badgesSeen.forEach { (pkg, count) -> put(pkg, count) } }).put("searchPill", s.searchPill).put("swipeDownHome", s.swipeDownHome).put("messagesApp", s.messagesApp ?: JSONObject.NULL).put(SettingKeys.MESSAGES_AVOID_DOUBLE, s.messagesAvoidDouble)
-            .put(SettingKeys.ISLAND_ALERTS, s.islandAlerts).put(SettingKeys.ISLAND_ALERT_APPS_OFF, JSONArray(s.islandAlertAppsOff.toList())).put("ccControls", JSONArray(s.ccControls))
-            .put("ccSize", s.ccSize.name).put("ccCentered", s.ccCentered).put("ncSplit", s.ncSplit)
-            .put("widgetStacks", JSONObject().apply { s.widgetStacks.forEach { (slot, ids) -> put(slot.toString(), JSONArray(ids)) } })
-            .put("stackRotate", s.stackRotate).put("railActivitiesUnderStatus", s.railActivities).put("addNewAppsToHome", s.addNewAppsToHome)
-            .put("layoutHistory", s.layoutHistory).put("dockRecentDots", s.dockRecentDots)
-            .put("installedTweaks", JSONArray(s.installedTweaks.toList()))
-            .put("folderColumns", s.folderColumns).put("folderBackground", s.folderBackground.name)
-            .put("folderBackdropOpacity", s.folderBackdropOpacity.toDouble())
-            .put("labelSize", s.labelSize.name).put("motionSpeed", s.motionSpeed.name).put("pageEffect", s.pageEffect.name)
-            .put("widgetGlass", s.widgetGlass.toDouble()).put("glassOutline", s.glassOutline.toDouble())
-            .put("focusModes", focusModesToJson(s.focusModes))
-            .put("activeFocus", s.activeFocus ?: "").put("leftPage", s.leftPage).put("todayUnfolded", s.todayUnfolded).put("systemWallpaper", s.systemWallpaper).put("homeInk", s.homeInk).put("tintedGlass", s.tintedGlass).put("glassTint", s.glassTint.toDouble()).put("reduceTransparency", s.reduceTransparency)
-            .put("roundedCorners", s.roundedCorners).put("cornerRadius", s.cornerRadius.toDouble())
-            .put("dimWallpaperDark", s.dimWallpaperDark).put("iconTintFromWallpaper", s.iconTintFromWallpaper)
-            .put("tintNotifications", s.tintNotifications).put("tintMedia", s.tintMedia).put("dockMagnify", s.dockMagnify).put("appPanels", s.appPanels).put("haptics", s.haptics).put("lockCover", s.lockCover)
-            .put("featureScopes", JSONObject().apply { s.featureScopes.forEach { (id, m) -> put(id, JSONObject(m as Map<*, *>)) } }).put("notificationAppRow", s.notificationAppRow)
-            .put("pageScrub", s.pageScrub).put("wallpaperMotion", s.wallpaperMotion).put("liveIcons", s.liveIcons).put("liveIconLook", s.liveIconLook)
-            .put("triggerActions", JSONObject().apply { s.triggerActions.forEach { (k, v) -> put(k, v) } })
-            .put("todayWidgets", JSONArray().apply { s.todayWidgets.forEach { put(JSONObject().put("id", it.id).put("size", it.size.name)) } })
-            .put("folderColors", JSONObject().apply { s.folderColors.forEach { (id, c) -> put(id, c) } })
-            .put("iconStacks", JSONObject().apply { s.iconStacks.forEach { (id, apps) -> put(id, JSONArray(apps)) } })
-            .put("appNames", JSONObject().apply { s.appNames.forEach { (id, name) -> put(id, name) } })
-            .put("pageStyles", JSONObject().apply { s.pageStyles.forEach { (page, style) -> put(page.toString(), JSONObject().put("scale", style.iconScale.toDouble())
-                .apply { style.labels?.let { put("labels", it) } }) } })
-            .put(SettingKeys.DOCK_EVERYWHERE, s.dockEverywhere).put(SettingKeys.ISLAND_EVERYWHERE, s.islandEverywhere)
-            .put(SettingKeys.ISLAND_HIDE_FULL_SCREEN, s.islandHideFullScreen).put(SettingKeys.ISLAND_HIDE_LANDSCAPE, s.islandHideLandscape)
-            .put(SettingKeys.BUTTON_BAR, s.buttonBar).put(SettingKeys.BUTTON_BAR_HEIGHT, s.buttonBarHeight.toDouble())
-            .put(SettingKeys.BUTTON_BAR_WIDTH, s.buttonBarWidth.toDouble()).put(SettingKeys.BUTTON_BAR_ANDROID_ORDER, s.buttonBarAndroidOrder)
-            .put(SettingKeys.BUTTON_BAR_LIGHT, s.buttonBarLight).put(SettingKeys.BUTTON_BAR_FADE, s.buttonBarFade)
-            .put("compact", preset(s.compact)).put("expanded", preset(s.expanded))
-            .put("homeRows", s.homeRows).put("homeFitCompact", s.homeFitCompact).put("homeFitExpanded", s.homeFitExpanded)
+        val data = encodeLauncherState(s)
         val editor = prefs.edit()
         if (legacyRaw != null && sourceSchema == 2 && !prefs.contains("state_v2_backup"))
             editor.putString("state_v2_backup", legacyRaw)
@@ -1189,7 +1209,7 @@ class LauncherModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun load(): LauncherState = runCatching {
-        decodeLauncherState(prefs.getString("state", "{}") ?: "{}", legacyRaw)
+        secureState(decodeLauncherState(prefs.getString("state", "{}") ?: "{}", legacyRaw))
     }.getOrElse {
         statePayloadInvalid = legacyRaw != null
         LauncherState(loading = false, error = "Saved Home layout could not be read; it was left unchanged.")
@@ -1211,6 +1231,110 @@ private fun launcherIcon(drawable: Drawable): Bitmap {
     drawable.background?.draw(canvas)
     drawable.foreground?.draw(canvas)
     return bitmap
+}
+
+/** Restoring older settings can add protection, but never weaken the protection currently on this phone. */
+internal fun mergeAppSecurity(current: Map<AppSecurityKey, AppSecurityMode>, incoming: Map<AppSecurityKey, AppSecurityMode>) =
+    (current.keys + incoming.keys).associateWith { key ->
+        if (current[key] == AppSecurityMode.HIDDEN || incoming[key] == AppSecurityMode.HIDDEN) AppSecurityMode.HIDDEN
+        else AppSecurityMode.LOCKED
+    }
+
+internal fun encodeAppSecurity(rules: Map<AppSecurityKey, AppSecurityMode>): JSONArray = JSONArray().also { array ->
+    rules.forEach { (key, mode) -> array.put(JSONObject().put("package", key.packageName)
+        .put("userSerial", key.userSerial).put("mode", mode.name)) }
+}
+
+internal fun decodeAppSecurity(array: JSONArray?): Map<AppSecurityKey, AppSecurityMode> {
+    if (array == null) return emptyMap()
+    require(array.length() <= 10_000) { "Too many app security rules" }
+    val rules = LinkedHashMap<AppSecurityKey, AppSecurityMode>()
+    repeat(array.length()) { index ->
+        val item = array.getJSONObject(index)
+        val packageName = item.getString("package")
+        require(packageName.length <= 255 && packageName.matches(Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)*")))
+        val value = item.get("userSerial") as? Number ?: error("Invalid security profile")
+        val serial = value.toLong()
+        require(serial >= 0 && value.toDouble() == serial.toDouble()) { "Invalid security profile" }
+        val key = AppSecurityKey(packageName, serial)
+        val mode = AppSecurityMode.valueOf(item.getString("mode"))
+        require(rules.put(key, mode) == null) { "Duplicate app security rule" }
+    }
+    return rules
+}
+
+/** Shared by persistence and portable backups so new settings are included in both. */
+internal fun encodeLauncherState(state: LauncherState): JSONObject {
+    val s = state.withRetiredOptionsDisabled()
+    fun preset(p: LayoutPreset) = JSONObject().put("iconSize", p.iconSize).put("rowGap", p.rowGap)
+        .put("dockWidth", p.dockWidth).put("dockPosition", p.dockPosition).put("dockAlignToGrid", p.dockAlignToGrid)
+        .put("dockPlacement", p.dockPlacement.name).put("statusAlignToGrid", p.statusAlignToGrid).put("statusPosition", p.statusPosition)
+        .put("columnGap", p.columnGap).put("dockSpacing", p.dockSpacing).put("widgetScale", p.widgetScale).put("pageTop", p.pageTop)
+    val widgets = JSONArray().also { array -> s.widgetPlacements.forEach { w -> array.put(JSONObject()
+        .put("slot", w.slot).put("id", w.id).put("page", w.page).put("column", w.column).put("row", w.row)
+        .put("spanX", w.spanX).put("spanY", w.spanY)) } }
+    val folders = JSONArray().also { array -> s.folders.forEach { folder -> array.put(JSONObject()
+        .put("id", folder.id).put("title", folder.title).put("apps", JSONArray(folder.appIds))) } }
+    val restores = JSONArray().also { array -> s.widgetRestores.forEach { restore -> array.put(JSONObject()
+        .put("slot", restore.slot).put("provider", restore.providerComponent).put("userSerial", restore.userSerial)
+        .put("title", restore.title).put("profileLabel", restore.profileLabel).put("work", restore.isWork)
+        .put("sourceScope", restore.sourceScope)) } }
+    return JSONObject().put("schema", STATE_SCHEMA).put("pinned", JSONArray(s.order)).put("homeSlots", JSONArray(s.homeSlots))
+        .put("leadingSlots", JSONArray(s.leadingSlots)).put("dock", JSONArray(s.dock))
+        .put("widgets", widgets).put("labels", s.labels)
+        .put("folders", folders)
+        .put("restores", restores)
+        .put("googleSearch", s.googleSearch)
+        .put("verticalStatus", s.verticalStatus)
+        .put("showSystemStatusBar", s.showSystemStatusBar)
+        .put(SettingKeys.LEFT_HANDED, s.leftHanded)
+        .put("hiddenApps", JSONArray(s.hiddenApps.toList()))
+        .put("appSecurity", encodeAppSecurity(s.appSecurity))
+        .put(SettingKeys.ISLAND, s.island)
+        .put("folioPanels", s.folioPanels)
+        .put("minPages", s.minPages)
+        .put("statusStyle", s.statusStyle.toJson())
+        .put("foldEffect", s.foldEffect).put("foldSnapshot", s.foldSnapshot).put("foldIntensity", s.foldIntensity.toDouble()).put("stayAwakeOnFold", s.stayAwakeOnFold)
+        .put("panelBlur", s.panelBlur.toDouble()).put("notificationClock", s.notificationClock).put("groupNotifications", s.groupNotifications)
+        .put("standBy", s.standBy).put("spotlightHidden", JSONArray(s.spotlightHidden.toList())).put("searchEngine", s.searchEngine)
+        .put(SettingKeys.ISLAND_EVENTS_OFF, JSONArray(s.islandEventsOff.toList())).put("libraryCategories", s.libraryCategories).put("libraryWork", s.libraryWork).put("iconStyle", s.iconStyle.name).put("iconTint", s.iconTint)
+        .put("iconShape", s.iconShape.name).put("iconPack", s.iconPack ?: JSONObject.NULL).put("badgeStyle", s.badgeStyle.name).put("badgeColor", s.badgeColor.name).put("badgeLook", s.badgeLook.name).put("badgeSize", s.badgeSize.name).put("badgesWhenOpened", s.badgesWhenOpened)
+        .put("badgesSeen", JSONObject().apply { s.badgesSeen.forEach { (pkg, count) -> put(pkg, count) } }).put("searchPill", s.searchPill).put("swipeDownHome", s.swipeDownHome).put("swipeUpHome", s.swipeUpHome).put("messagesApp", s.messagesApp ?: JSONObject.NULL).put(SettingKeys.MESSAGES_AVOID_DOUBLE, s.messagesAvoidDouble)
+        .put(SettingKeys.ISLAND_ALERTS, s.islandAlerts).put(SettingKeys.ISLAND_ALERT_APPS_OFF, JSONArray(s.islandAlertAppsOff.toList())).put("ccControls", JSONArray(s.ccControls))
+        .put("ccSize", s.ccSize.name).put("ccCentered", s.ccCentered).put("ncSplit", s.ncSplit)
+        .put("widgetStacks", JSONObject().apply { s.widgetStacks.forEach { (slot, ids) -> put(slot.toString(), JSONArray(ids)) } })
+        .put("stackRotate", s.stackRotate).put("addNewAppsToHome", s.addNewAppsToHome)
+        .put("railActivityOverlay", s.railActivityOverlay)
+        .put("layoutHistory", s.layoutHistory).put("dockRecentDots", s.dockRecentDots)
+        .put("folderColumns", s.folderColumns).put("folderBackground", s.folderBackground.name)
+        .put("folderBackdropOpacity", s.folderBackdropOpacity.toDouble())
+        .put("labelSize", s.labelSize.name).put("motionSpeed", s.motionSpeed.name).put("pageEffect", s.pageEffect.name)
+        .put("widgetGlass", s.widgetGlass.toDouble()).put("glassOutline", s.glassOutline.toDouble())
+        .put("backgroundMaterial", s.backgroundMaterial.name)
+        .put("focusModes", focusModesToJson(s.focusModes))
+        .put("activeFocus", s.activeFocus ?: "").put("leftPage", s.leftPage).put("todayUnfolded", s.todayUnfolded).put("systemWallpaper", s.systemWallpaper).put("homeInk", s.homeInk).put("tintedGlass", s.tintedGlass).put("glassTint", s.glassTint.toDouble()).put("reduceTransparency", s.reduceTransparency)
+        .put("roundedCorners", s.roundedCorners).put("cornerRadius", s.cornerRadius.toDouble())
+        .put("dimWallpaperDark", s.dimWallpaperDark).put("iconTintFromWallpaper", s.iconTintFromWallpaper)
+        .put("tintNotifications", s.tintNotifications).put("tintMedia", s.tintMedia).put("dockMagnify", s.dockMagnify).put("appPanels", s.appPanels).put("haptics", s.haptics).put("lockCover", s.lockCover)
+        .put("featureScopes", JSONObject().apply { s.featureScopes.forEach { (id, m) -> put(id, JSONObject(m as Map<*, *>)) } }).put("notificationAppRow", s.notificationAppRow)
+        .put("pageScrub", s.pageScrub).put("wallpaperMotion", s.wallpaperMotion).put("liveIcons", s.liveIcons).put("liveIconLook", s.liveIconLook)
+        .put("triggerActions", JSONObject().apply { s.triggerActions.forEach { (k, v) -> put(k, v) } })
+        .put("todayWidgets", JSONArray().apply { s.todayWidgets.forEach { widget ->
+            put(JSONObject().put("id", widget.id).put("size", widget.size.name).apply {
+                widget.span?.let { put("spanX", it.width); put("spanY", it.height) }
+            })
+        } })
+        .put("folderColors", JSONObject().apply { s.folderColors.forEach { (id, c) -> put(id, c) } })
+        .put("iconStacks", JSONObject().apply { s.iconStacks.forEach { (id, apps) -> put(id, JSONArray(apps)) } })
+        .put("appNames", JSONObject().apply { s.appNames.forEach { (id, name) -> put(id, name) } })
+        .put("pageStyles", JSONObject().apply { s.pageStyles.forEach { (page, style) -> put(page.toString(), JSONObject().put("scale", style.iconScale.toDouble())
+            .apply { style.labels?.let { put("labels", it) } }) } })
+        .put(SettingKeys.DOCK_EVERYWHERE, s.dockEverywhere)
+        .put(SettingKeys.BUTTON_BAR, s.buttonBar).put(SettingKeys.BUTTON_BAR_HEIGHT, s.buttonBarHeight.toDouble())
+        .put(SettingKeys.BUTTON_BAR_WIDTH, s.buttonBarWidth.toDouble()).put(SettingKeys.BUTTON_BAR_ANDROID_ORDER, s.buttonBarAndroidOrder)
+        .put(SettingKeys.BUTTON_BAR_LIGHT, s.buttonBarLight).put(SettingKeys.BUTTON_BAR_FADE, s.buttonBarFade)
+        .put("compact", preset(s.compact)).put("expanded", preset(s.expanded))
+        .put("homeRows", s.homeRows).put("homeFitCompact", s.homeFitCompact).put("homeFitExpanded", s.homeFitExpanded)
 }
 
 /**
@@ -1347,10 +1471,11 @@ internal fun decodeLauncherState(raw: String, legacyRaw: String?): LauncherState
         googleSearch = j.optBoolean("googleSearch", true),
         labels = j.optBoolean("labels", true), compact = preset("compact", LayoutPreset()),
         expanded = preset("expanded", LayoutPreset()), verticalStatus = j.optBoolean("verticalStatus", true),
+        showSystemStatusBar = j.optBoolean("showSystemStatusBar", !j.optBoolean("verticalStatus", true)),
         leftHanded = j.optBoolean("leftHanded", false),
         hiddenApps = j.optJSONArray("hiddenApps")?.let { a -> (0 until a.length()).map(a::getString).toSet() } ?: emptySet(),
-        island = j.optBoolean("island", true),
-        islandInSpotlight = j.optBoolean("islandInSpotlight", true),
+        appSecurity = decodeAppSecurity(if (j.has("appSecurity")) j.getJSONArray("appSecurity") else null),
+        island = j.optBoolean(SettingKeys.ISLAND, true),
         folioPanels = j.optBoolean("folioPanels", true),
         minPages = j.optInt("minPages", 1).coerceIn(1, 20),
         statusStyle = StatusStyle.fromJson(j.optJSONObject("statusStyle")),
@@ -1376,6 +1501,7 @@ internal fun decodeLauncherState(raw: String, legacyRaw: String?): LauncherState
         badgesSeen = j.optJSONObject("badgesSeen")?.let { o -> o.keys().asSequence().associateWith { o.getInt(it) }.filterValues { it > 0 } } ?: emptyMap(),
         searchPill = j.optBoolean("searchPill", true),
         // Up to 0.6.0 this was a switch for Spotlight alone.
+        swipeUpHome = j.optString("swipeUpHome", "OFF").takeIf { it in setOf("OFF", "LIBRARY", "SPOTLIGHT", "NOTIFICATIONS") } ?: "OFF",
         swipeDownHome = j.optString("swipeDownHome", "").ifBlank { if (j.optBoolean("swipeDownSearch", true)) "SPOTLIGHT" else "OFF" },
         messagesApp = j.optString("messagesApp").takeIf { it.isNotBlank() && it != "null" },
         messagesAvoidDouble = j.optBoolean(SettingKeys.MESSAGES_AVOID_DOUBLE, true),
@@ -1390,7 +1516,7 @@ internal fun decodeLauncherState(raw: String, legacyRaw: String?): LauncherState
             key.toIntOrNull()?.let { slot -> slot to (0 until ids.length()).map(ids::getInt) }
         }.toMap() } ?: emptyMap(),
         stackRotate = j.optBoolean("stackRotate", true),
-        railActivities = j.optBoolean("railActivitiesUnderStatus", false),
+        railActivityOverlay = j.optBoolean("railActivityOverlay", false),
         addNewAppsToHome = j.optBoolean("addNewAppsToHome", false),
         layoutHistory = j.optBoolean("layoutHistory", false), dockRecentDots = j.optBoolean("dockRecentDots", false),
         folderColumns = j.optInt("folderColumns", 0).takeIf { it in setOf(0, 3, 4) } ?: 0,
@@ -1409,6 +1535,7 @@ internal fun decodeLauncherState(raw: String, legacyRaw: String?): LauncherState
         homeInk = j.optString("homeInk", "AUTO").takeIf { it in setOf("AUTO", "LIGHT", "DARK") } ?: "AUTO",
         tintedGlass = j.optBoolean("tintedGlass", true),
         glassTint = j.optDouble("glassTint", .5).toFloat().takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: .5f,
+        backgroundMaterial = runCatching { BackgroundMaterial.valueOf(j.optString("backgroundMaterial")) }.getOrDefault(BackgroundMaterial.SOFT_BLUR),
         reduceTransparency = j.optBoolean("reduceTransparency", false),
         roundedCorners = j.optBoolean("roundedCorners", false), cornerRadius = j.optDouble("cornerRadius", 40.0).toFloat().coerceIn(16f, 72f), dimWallpaperDark = j.optBoolean("dimWallpaperDark", true),
         iconTintFromWallpaper = j.optBoolean("iconTintFromWallpaper", false),
@@ -1422,7 +1549,11 @@ internal fun decodeLauncherState(raw: String, legacyRaw: String?): LauncherState
         liveIconLook = j.optString("liveIconLook", "AUTO").takeIf { it in setOf("AUTO", "LIGHT", "DARK") } ?: "AUTO",
         triggerActions = j.optJSONObject("triggerActions")?.let { o -> o.keys().asSequence().associateWith { o.getString(it) } } ?: emptyMap(),
         todayWidgets = j.optJSONArray("todayWidgets")?.let { a -> (0 until a.length()).mapNotNull { i ->
-            a.optJSONObject(i)?.let { o -> runCatching { TodayWidget(o.getInt("id"), TodaySize.valueOf(o.getString("size"))) }.getOrNull() }
+            a.optJSONObject(i)?.let { o -> runCatching {
+                val span = if (o.has("spanX") && o.has("spanY")) WidgetSpan(o.getInt("spanX").coerceIn(1, GRID_COLUMNS),
+                    o.getInt("spanY").coerceIn(1, GRID_ROWS)) else null
+                TodayWidget(o.getInt("id"), TodaySize.valueOf(o.getString("size")), span)
+            }.getOrNull() }
         } } ?: DEFAULT_TODAY_WIDGETS,
         folderColors = j.optJSONObject("folderColors")?.let { o -> o.keys().asSequence().associateWith { o.getLong(it) } } ?: emptyMap(),
         pageStyles = j.optJSONObject("pageStyles")?.let { o -> o.keys().asSequence().mapNotNull { key ->
@@ -1438,9 +1569,7 @@ internal fun decodeLauncherState(raw: String, legacyRaw: String?): LauncherState
         iconStacks = j.optJSONObject("iconStacks")?.let { o -> o.keys().asSequence().associateWith { key ->
             o.optJSONArray(key)?.let { a -> (0 until a.length()).mapNotNull { a.optString(it).takeIf(String::isNotBlank) } }.orEmpty()
         }.filterValues { it.isNotEmpty() } } ?: emptyMap(),
-        dockEverywhere = j.optBoolean("dockEverywhere", false), islandEverywhere = j.optBoolean("islandEverywhere", false),
-        islandHideFullScreen = j.optBoolean(SettingKeys.ISLAND_HIDE_FULL_SCREEN, true),
-        islandHideLandscape = j.optBoolean(SettingKeys.ISLAND_HIDE_LANDSCAPE, false),
+        dockEverywhere = j.optBoolean(SettingKeys.DOCK_EVERYWHERE, false),
         buttonBar = j.optBoolean(SettingKeys.BUTTON_BAR, false),
         buttonBarHeight = j.optDouble(SettingKeys.BUTTON_BAR_HEIGHT, 52.0).toFloat().coerceIn(44f, 60f),
         buttonBarWidth = j.optDouble(SettingKeys.BUTTON_BAR_WIDTH, .5).toFloat().coerceIn(.3f, .8f),
@@ -1454,17 +1583,7 @@ internal fun decodeLauncherState(raw: String, legacyRaw: String?): LauncherState
             .takeIf { it == BASE_APP_ROWS } ?: 0,
         homeFitCompact = j.optInt("homeFitCompact", 0).takeIf { it in BASE_APP_ROWS..MAX_APP_ROWS } ?: 0,
         homeFitExpanded = j.optInt("homeFitExpanded", 0).takeIf { it in BASE_APP_ROWS..MAX_APP_ROWS } ?: 0)
-        .let { st ->
-            val saved = j.optJSONArray("installedTweaks")
-            when {
-                saved != null -> st.copy(installedTweaks = (0 until saved.length()).mapNotNull { saved.optString(it).takeIf(String::isNotBlank) }.toSet())
-                // Updating from before the Tweak Library: every tweak that's on counts as installed, so nothing changes.
-                legacyRaw != null -> st.copy(installedTweaks = TweakFeatures.filter { it.get(st) || it.id in st.featureScopes }.mapTo(mutableSetOf()) { it.id })
-                // A new install starts clean: tweaks are added from the Tweak Library when wanted.
-                else -> st.copy(installedTweaks = emptySet(), appPanels = false, dockMagnify = false, notificationAppRow = false,
-                    tintNotifications = false, tintMedia = false)
-            }
-        }
+        .withRetiredOptionsDisabled()
 }
 
 /** How strongly glass takes the wallpaper color: none when tinting is off; half the slider is the original .28. */

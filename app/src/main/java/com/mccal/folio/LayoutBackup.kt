@@ -5,9 +5,9 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** 3: 36-cell Home pages (More rows); versions 1–2 had 24-cell pages and are moved on import. */
-const val LAYOUT_BACKUP_VERSION = 3
-const val MAX_LAYOUT_BACKUP_BYTES = 2 * 1024 * 1024
+/** 4 includes app settings and preferences; versions 1–3 remain layout-only backups. */
+const val LAYOUT_BACKUP_VERSION = 4
+const val MAX_LAYOUT_BACKUP_BYTES = 16 * 1024 * 1024
 private const val MAX_BACKUP_PAGES = 100
 
 data class BackupWidgetDescriptor(
@@ -32,12 +32,10 @@ data class LayoutImportPreview(
     val labels: Boolean,
     val googleSearch: Boolean,
     val verticalStatus: Boolean,
-    /** What the Market installed on the phone this backup came from, for `InstalledStore` to read. */
-    val packages: String? = null,
-    /** How many packages that is. Only the Market can count them, so [BackupController] fills this in. */
-    val packageCount: Int = 0,
     /** Names people typed themselves. They exist nowhere else on the phone, so a backup that left them out lost them. */
     val appNames: Map<String, String> = emptyMap(),
+    val settings: LauncherState? = null,
+    val preferenceSettings: JSONObject? = null,
 )
 
 fun layoutBackupScope(context: Context): String {
@@ -49,8 +47,7 @@ fun encodeLayoutBackup(
     state: LauncherState,
     widgetDescriptors: List<BackupWidgetDescriptor>,
     sourceScope: String,
-    /** What the Market installed, from `InstalledStore.export()`, or null when this phone has no packages to carry. */
-    packages: String? = null,
+    preferenceSettings: JSONObject? = null,
 ): String {
     require(sourceScope.isNotBlank())
     require(state.leadingSlots.size == HOME_CELLS) { "Unfolded-only page must contain exactly $HOME_CELLS cells" }
@@ -82,26 +79,26 @@ fun encodeLayoutBackup(
         .put("dockPlacement", value.dockPlacement.name).put("statusAlignToGrid", value.statusAlignToGrid).put("statusPosition", value.statusPosition)
         .put("columnGap", value.columnGap).put("dockSpacing", value.dockSpacing).put("widgetScale", value.widgetScale).put("pageTop", value.pageTop)
     val root = JSONObject().put("version", LAYOUT_BACKUP_VERSION).put("sourceScope", sourceScope).put("apps", apps)
+        .put("personalUserSerial", state.profiles.firstOrNull(AppProfile::isPersonal)?.userSerial)
         .put("homeSlots", JSONArray(state.homeSlots)).put("leadingSlots", JSONArray(state.leadingSlots))
         .put("dock", JSONArray(state.dock)).put("folders", folders).put("widgets", widgets)
         .put("labels", state.labels).put("googleSearch", state.googleSearch).put("verticalStatus", state.verticalStatus)
         .put("compact", preset(state.compact)).put("expanded", preset(state.expanded))
     // The names people typed themselves (since 0.6.5): they exist nowhere else on the phone.
     root.put("appNames", JSONObject().apply { state.appNames.forEach { (id, name) -> put(id, name) } })
-    // Added in 0.7.0, and deliberately not a new backup version: a Folio that has never heard of the Market reads
-    // everything else in this file and ignores a key it doesn't know, so backups still travel backwards.
-    packages?.let { root.put("packages", JSONObject(it)) }
+    root.put("settings", launcherSettingsBackup(state))
+    preferenceSettings?.let { root.put("preferences", it) }
     val text = root.toString(2)
     // A backup over the limit can never be imported, here or anywhere else, so say so while there is still someone
     // to tell rather than writing a file that only fails later.
-    require(text.toByteArray(Charsets.UTF_8).size <= MAX_LAYOUT_BACKUP_BYTES) { "Layout backup is larger than 2 MB" }
+    require(text.toByteArray(Charsets.UTF_8).size <= MAX_LAYOUT_BACKUP_BYTES) { "Backup is larger than 16 MB" }
     return text
 }
 
 internal fun exportedWidgetScope(restore: WidgetRestore, currentScope: String) = restore.sourceScope ?: currentScope
 
 fun decodeLayoutBackup(raw: String, currentApps: List<AppEntry>, currentProfiles: List<AppProfile>, currentScope: String): LayoutImportPreview {
-    require(raw.toByteArray(Charsets.UTF_8).size <= MAX_LAYOUT_BACKUP_BYTES) { "Layout backup is larger than 2 MB" }
+    require(raw.toByteArray(Charsets.UTF_8).size <= MAX_LAYOUT_BACKUP_BYTES) { "Backup is larger than 16 MB" }
     val root = JSONObject(raw)
     val version = root.strictInt("version")
     require(version in 1..LAYOUT_BACKUP_VERSION) { "Unsupported layout backup version" }
@@ -221,19 +218,61 @@ fun decodeLayoutBackup(raw: String, currentApps: List<AppEntry>, currentProfiles
     val compact = preset("compact"); val expanded = preset("expanded")
     val labels = root.strictBoolean("labels"); val googleSearch = root.strictBoolean("googleSearch")
     val verticalStatus = root.strictBoolean("verticalStatus")
-    // Added in 0.7.0; an older backup leaves the key out and carries no packages. Read but not understood here:
-    // what is inside belongs to `:market`, and only the Market can say what to do with it.
-    val packages = root.optJSONObject("packages")?.toString()
     // Written since 0.6.5; a backup made before that simply has none, and the names already on the phone stay.
     val appNames = root.optJSONObject("appNames")?.let { o ->
         o.keys().asSequence().mapNotNull { id -> o.optString(id).takeIf { it.isNotBlank() }?.let { id to it.take(60) } }.toMap()
     }.orEmpty()
+    val settings = if (version >= 4 && root.has("settings")) decodeLauncherSettingsBackup(root.getJSONObject("settings")).let { state ->
+        val sourcePersonal = root.optLong("personalUserSerial", -1)
+        val currentPersonal = currentProfiles.firstOrNull(AppProfile::isPersonal)?.userSerial
+        if (sourcePersonal >= 0 && currentPersonal != null) state.copy(appSecurity = state.appSecurity.entries.fold(
+            emptyMap<AppSecurityKey, AppSecurityMode>()) { rules, (key, mode) ->
+            mergeAppSecurity(rules, mapOf(key.copy(userSerial = if (key.userSerial == sourcePersonal) currentPersonal else key.userSerial) to mode))
+        }) else state
+    } else null
+    val preferenceSettings = if (version >= 4 && root.has("preferences")) validatePreferenceBackup(root.getJSONObject("preferences")) else null
     return LayoutImportPreview(layout, missing.toList(), profileIssues.toList(),
         appCount = (slots + leadingSlots).count { it != null && !isReservedFolderId(it) } +
             dock.count { it != null } + folders.sumOf { it.appIds.size },
         folderCount = folders.size, widgetCount = layout.widgetPlacements.size,
         compact = compact, expanded = expanded, labels = labels, googleSearch = googleSearch, verticalStatus = verticalStatus,
-        packages = packages, appNames = appNames)
+        appNames = appNames, settings = settings, preferenceSettings = preferenceSettings)
+}
+
+/** Android widget IDs and measured/runtime state belong to their original app installation. */
+private val nonportableLauncherKeys = setOf("pinned", "homeSlots", "leadingSlots", "dock", "widgets", "folders", "restores",
+    "widgetStacks", "badgesSeen", "homeFitCompact", "homeFitExpanded", "activeFocus")
+
+internal fun launcherSettingsBackup(state: LauncherState): JSONObject =
+    encodeLauncherState(state.copy(todayWidgets = state.todayWidgets.filter { it.id < 0 })).apply {
+        nonportableLauncherKeys.forEach { remove(it) }
+    }
+
+private fun decodeLauncherSettingsBackup(json: JSONObject): LauncherState {
+    require(json.strictInt("schema") in 1..STATE_SCHEMA) { "Unsupported app settings version" }
+    val defaults = LauncherState(widgetPlacements = emptyList())
+    val allowed = launcherSettingsBackup(defaults)
+    val data = encodeLauncherState(defaults)
+    json.keys().forEach { key ->
+        if (allowed.has(key)) {
+            val value = json.get(key)
+            val expected = allowed.get(key)
+            require(when (expected) {
+                is Boolean -> value is Boolean
+                is Number -> value is Number && value.toDouble().isFinite()
+                is String -> value is String
+                is JSONArray -> value is JSONArray
+                is JSONObject -> value is JSONObject
+                else -> value == JSONObject.NULL || value is String
+            }) { "Invalid app setting: $key" }
+            data.put(key, value)
+        }
+    }
+    // The decoder also needs layout arrays of the corresponding schema, supplied by the current defaults.
+    data.put("schema", STATE_SCHEMA)
+    return decodeLauncherState(data.toString(), null).let { state ->
+        state.copy(todayWidgets = state.todayWidgets.filter { it.id < 0 })
+    }
 }
 
 internal fun validBackupPlacement(value: WidgetPlacement): Boolean {

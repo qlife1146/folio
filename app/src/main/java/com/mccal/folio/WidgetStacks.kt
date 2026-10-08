@@ -45,7 +45,7 @@ internal object WidgetStacks {
 internal val LocalWidgetStacks = androidx.compose.runtime.compositionLocalOf { emptyMap<Int, List<Int>>() }
 internal val LocalStackRotate = androidx.compose.runtime.compositionLocalOf { true }
 
-/** Size of a widget on the Today View's two-column grid. */
+/** Legacy Today size categories, retained for existing saved layouts. */
 enum class TodaySize(@androidx.annotation.StringRes val label: Int, val columns: Int, val rows: Int) {
     SMALL(R.string.small, 1, 1), MEDIUM(R.string.medium, 2, 1), LARGE(R.string.large, 2, 2);
 
@@ -60,7 +60,7 @@ enum class TodaySize(@androidx.annotation.StringRes val label: Int, val columns:
 }
 
 /** One widget on the Today View: a bound app widget id (>= 0) or a Folio built-in card id (< 0). */
-data class TodayWidget(val id: Int, val size: TodaySize)
+data class TodayWidget(val id: Int, val size: TodaySize, val span: WidgetSpan? = null)
 
 internal val DEFAULT_TODAY_WIDGETS = listOf(TodayWidget(CLOCK_WIDGET, TodaySize.SMALL), TodayWidget(DATE_WIDGET, TodaySize.SMALL))
 

@@ -375,10 +375,6 @@ private fun NotificationOptions(item: NotificationItem, bounds: android.graphics
             (view.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window?.let { w ->
                 w.setDimAmount(0f)
                 // Same full-screen window as the launcher, so the lifted card lines up exactly with the original.
-                androidx.core.view.WindowCompat.getInsetsController(w, w.decorView).apply {
-                    systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                    hide(androidx.core.view.WindowInsetsCompat.Type.statusBars())
-                }
                 w.attributes = w.attributes.apply { layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS }
                 w.addFlags(android.view.WindowManager.LayoutParams.FLAG_BLUR_BEHIND); w.attributes = w.attributes.apply { blurBehindRadius = 40 }
             }
@@ -504,7 +500,7 @@ private fun ControlCenter(modifier: Modifier, status: DeviceStatus, controlNames
     val controls = remember { DeviceControls(context) }
     DisposableEffect(controls) { controls.start(); onDispose { controls.stop() } }
     val media = (IslandListenerService.activity.collectAsStateWithLifecycle().value as? IslandActivity.Media)
-    val open = { intent: Intent -> onClose(); runCatching { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }; Unit }
+    val open = { intent: Intent -> onClose(); runCatching { AppSecurity.startActivity(context, intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }; Unit }
     fun launchFirst(packages: List<String>) = packages.firstNotNullOfOrNull { context.packageManager.getLaunchIntentForPackage(it) }
     fun available(control: CcControl) = when (control) {
         CcControl.WALLET -> launchFirst(CcControl.WALLETS) != null
@@ -860,18 +856,28 @@ private class DeviceControls(private val context: Context) {
     private val torchCallback = object : CameraManager.TorchCallback() {
         override fun onTorchModeChanged(cameraId: String, enabled: Boolean) { if (cameraId == torchId) torchOn = enabled }
     }
+    private val rotationObserver = object : android.database.ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) { readRotationLock() }
+    }
+    private fun readRotationLock() {
+        rotationLocked = Settings.System.getInt(context.contentResolver, Settings.System.ACCELEROMETER_ROTATION, 1) == 0
+    }
 
     fun start() {
         runCatching { camera.registerTorchCallback(torchCallback, null) }
         val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
         volume = audio.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / max
         brightness = runCatching { Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS) / 255f }.getOrDefault(.5f)
-        rotationLocked = runCatching { Settings.System.getInt(context.contentResolver, Settings.System.ACCELEROMETER_ROTATION) == 0 }.getOrDefault(false)
+        readRotationLock()
+        context.contentResolver.registerContentObserver(Settings.System.getUriFor(Settings.System.ACCELEROMETER_ROTATION), false, rotationObserver)
         dndOn = notifications.currentInterruptionFilter > NotificationManager.INTERRUPTION_FILTER_ALL
         bluetoothOn = runCatching { context.getSystemService(android.bluetooth.BluetoothManager::class.java)?.adapter?.isEnabled == true }.getOrDefault(false)
     }
 
-    fun stop() { runCatching { camera.unregisterTorchCallback(torchCallback) } }
+    fun stop() {
+        runCatching { camera.unregisterTorchCallback(torchCallback) }
+        context.contentResolver.unregisterContentObserver(rotationObserver)
+    }
 
     fun toggleTorch() { torchId?.let { id -> runCatching { camera.setTorchMode(id, !torchOn) } } }
 
@@ -899,11 +905,14 @@ private class DeviceControls(private val context: Context) {
 
     fun toggleRotationLock(): Boolean {
         if (!Settings.System.canWrite(context)) return false
-        runCatching {
+        readRotationLock()
+        return runCatching {
+            if (!rotationLocked) {
+                val rotation = context.display?.rotation ?: return@runCatching false
+                if (!Settings.System.putInt(context.contentResolver, Settings.System.USER_ROTATION, rotation)) return@runCatching false
+            }
             Settings.System.putInt(context.contentResolver, Settings.System.ACCELEROMETER_ROTATION, if (rotationLocked) 1 else 0)
-            rotationLocked = !rotationLocked
-        }
-        return true
+        }.getOrDefault(false).also { readRotationLock() }
     }
 
     /** Returns false when Do Not Disturb access hasn't been granted yet. */

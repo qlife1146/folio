@@ -121,7 +121,7 @@ class IslandEvents private constructor(private val context: Context) {
             else -> SHOW_MS
         }
 
-        /** Home islands on screen that can show a notice card (not the upright one beside a side camera). */
+        /** Visible Home rails that can show a brief notice. */
         @Volatile internal var noticeIslands = 0
 
         /**

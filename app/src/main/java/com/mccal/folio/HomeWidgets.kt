@@ -171,6 +171,19 @@ internal fun WidgetSlot(id: Int, slot: Int, controller: WidgetController, modifi
     var restoreMessage by remember(slot) { mutableStateOf<String?>(null) }
     BoxWithConstraints(modifier.clip(RoundedCornerShape(FolioRadius.PANEL.dp)).testTag("widget-slot-$slot")) {
         val displayedContentSize = WidgetContentSize(maxWidth.value, maxHeight.value)
+        if (controller.isProtected(id, slot)) {
+            Column(Modifier.fillMaxSize().background(Glass.copy(alpha = .88f)).padding(FolioSpace.MEDIUM.dp),
+                verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(stringResource(R.string.security_widget_locked), color = Ink, textAlign = TextAlign.Center)
+                restoreMessage?.let { Text(it, color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center) }
+                if (id == NEEDS_BINDING_WIDGET) TextButton(onClick = {
+                    if (!controller.rebindRestoredWidget(slot, contentSize = displayedContentSize))
+                        restoreMessage = context.getString(R.string.that_provider_or_profile_isn_t_available)
+                }) { Text(stringResource(R.string.reconnect)) }
+            }
+            return@BoxWithConstraints
+        }
         if (id == NEEDS_BINDING_WIDGET) {
             val restore = controller.restoreDescriptor(slot)
             Surface(Modifier.fillMaxSize().testTag("widget-restore-$slot"), color = Glass.copy(alpha = .88f),
@@ -194,10 +207,10 @@ internal fun WidgetSlot(id: Int, slot: Int, controller: WidgetController, modifi
             }
             return@BoxWithConstraints
         }
-        val info = remember(id) { if (id >= 0) controller.manager.getAppWidgetInfo(id) else null }
+        val info = controller.rememberInfo(id)
         if (info == null) fallback()
         else {
-            key(id) {
+            key(id, controller.providerRevision) {
                 AndroidView(factory = { context -> controller.host.createView(context, id, info) },
                     modifier = Modifier.fillMaxSize())
             }
@@ -327,14 +340,14 @@ internal fun WidgetActions(
     onStartResize: (Int, Int) -> Unit,
     onMoveToPage: (Int) -> Boolean,
     homePages: Int,
-    onReplace: () -> Unit,
+    onReplace: (() -> Unit)?,
     onRemove: () -> Unit,
     onClose: () -> Unit,
     stackCards: List<Int> = emptyList(),
     stackLabel: (Int) -> String? = { null },
     stackRotate: Boolean = true,
     onStackRotate: (Boolean) -> Unit = {},
-    onAddToStack: () -> Unit = {},
+    onAddToStack: (() -> Unit)? = null,
     onRemoveFromStack: (Int) -> Unit = {},
     onShowFirstInStack: (Int) -> Unit = {},
     /** Rows the widget's page shows (More rows); sizes never reach past them. */
@@ -411,49 +424,51 @@ internal fun WidgetActions(
             }
         }
 
-        SheetGroupLabel(stringResource(R.string.widget))
-        SheetGroup {
-            if (canConfigure) { MenuRow(stringResource(R.string.edit_widget), Icons.Rounded.Settings) { onConfigure() }; MenuDivider() }
-            MenuRow(stringResource(R.string.replace_widget), Icons.Rounded.FindReplace) { onReplace() }
-            if (homePages > 1) {
-                MenuDivider()
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(FolioSpace.MEDIUM.dp), horizontalArrangement = Arrangement.spacedBy(FolioSpace.SMALL.dp)) {
-                    repeat(homePages) { page ->
-                        IosChip(selected = placement.page == page, onClick = { onMoveToPage(page) },
-                            label = { Text(stringResource(R.string.page_1, page + 1)) }, modifier = Modifier.testTag("widget-move-${placement.slot}-page-$page"))
-                    }
-                }
-            }
-        }
-
-        SheetGroupLabel(stringResource(R.string.smart_stack))
-        SheetGroup {
-            MenuRow(if (stackCards.size > 1) stringResource(R.string.add_widget_to_stack) else stringResource(R.string.make_a_stack), Icons.Rounded.Layers) { onAddToStack() }
-            if (stackCards.size > 1) {
-                stackCards.forEachIndexed { index, card ->
+        if (canConfigure || onReplace != null || homePages > 1) {
+            SheetGroupLabel(stringResource(R.string.widget))
+            SheetGroup {
+                if (canConfigure) { MenuRow(stringResource(R.string.edit_widget), Icons.Rounded.Settings) { onConfigure() }; MenuDivider() }
+                if (onReplace != null) MenuRow(stringResource(R.string.replace_widget), Icons.Rounded.FindReplace) { onReplace() }
+                if (homePages > 1) {
                     MenuDivider()
-                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = FolioSpace.LARGE.dp), verticalAlignment = Alignment.CenterVertically) {
-                        val cardName = stackLabel(card) ?: stringResource(R.string.widget)
-                        Text("${index + 1}. $cardName", Modifier.weight(1f), color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        if (index > 0) TextButton(onClick = { onShowFirstInStack(card) }) { Text(stringResource(R.string.show_first)) }
-                        IconButton(onClick = { onRemoveFromStack(card) }) {
-                            Icon(Icons.Rounded.RemoveCircleOutline, stringResource(R.string.remove_from_stack, cardName), tint = FolioColors.Red)
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(FolioSpace.MEDIUM.dp), horizontalArrangement = Arrangement.spacedBy(FolioSpace.SMALL.dp)) {
+                        repeat(homePages) { page ->
+                            IosChip(selected = placement.page == page, onClick = { onMoveToPage(page) },
+                                label = { Text(stringResource(R.string.page_1, page + 1)) }, modifier = Modifier.testTag("widget-move-${placement.slot}-page-$page"))
                         }
                     }
                 }
-                MenuDivider()
-                Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(start = FolioSpace.LARGE.dp, end = FolioSpace.SMALL.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(stringResource(R.string.smart_rotate), color = Color.White)
-                        Text(stringResource(R.string.show_the_next_widget_every_30_minutes), color = secondary, fontSize = FolioType.FOOTNOTE.sp)
-                    }
-                    IosSwitch(stackRotate, onStackRotate)
-                }
             }
         }
-        if (stackCards.size > 1) Text(stringResource(R.string.swipe_up_or_down_on_the_stack_to_flip_be), color = secondary, fontSize = FolioType.FOOTNOTE.sp,
-            modifier = Modifier.padding(start = FolioSpace.TINY.dp))
-
+        if (onAddToStack != null) {
+            SheetGroupLabel(stringResource(R.string.smart_stack))
+            SheetGroup {
+                MenuRow(if (stackCards.size > 1) stringResource(R.string.add_widget_to_stack) else stringResource(R.string.make_a_stack), Icons.Rounded.Layers) { onAddToStack() }
+                if (stackCards.size > 1) {
+                    stackCards.forEachIndexed { index, card ->
+                        MenuDivider()
+                        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = FolioSpace.LARGE.dp), verticalAlignment = Alignment.CenterVertically) {
+                            val cardName = stackLabel(card) ?: stringResource(R.string.widget)
+                            Text("${index + 1}. $cardName", Modifier.weight(1f), color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (index > 0) TextButton(onClick = { onShowFirstInStack(card) }) { Text(stringResource(R.string.show_first)) }
+                            IconButton(onClick = { onRemoveFromStack(card) }) {
+                                Icon(Icons.Rounded.RemoveCircleOutline, stringResource(R.string.remove_from_stack, cardName), tint = FolioColors.Red)
+                            }
+                        }
+                    }
+                    MenuDivider()
+                    Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(start = FolioSpace.LARGE.dp, end = FolioSpace.SMALL.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(stringResource(R.string.smart_rotate), color = Color.White)
+                            Text(stringResource(R.string.show_the_next_widget_every_30_minutes), color = secondary, fontSize = FolioType.FOOTNOTE.sp)
+                        }
+                        IosSwitch(stackRotate, onStackRotate)
+                    }
+                }
+            }
+            if (stackCards.size > 1) Text(stringResource(R.string.swipe_up_or_down_on_the_stack_to_flip_be), color = secondary, fontSize = FolioType.FOOTNOTE.sp,
+                modifier = Modifier.padding(start = FolioSpace.TINY.dp))
+        }
         SheetGroup(Modifier.padding(top = FolioSpace.SMALL.dp)) {
             MenuRow(if (stackCards.size > 1) stringResource(R.string.remove_stack) else stringResource(R.string.remove_widget_2), Icons.Rounded.RemoveCircleOutline, destructive = true) { onRemove() }
         }

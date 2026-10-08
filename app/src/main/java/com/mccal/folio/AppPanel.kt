@@ -77,24 +77,30 @@ internal fun Modifier.swipeUpForPanel(onSwipeUp: (() -> Unit)?): Modifier = if (
 /** iOS-style app panel above the icon: shortcuts, the app's latest notifications and its music controls. */
 @Composable
 internal fun AppPanel(app: AppEntry, onDismiss: () -> Unit, onOpen: () -> Unit) {
+    if (AppSecurity.isHidden(app) && !AppSecurity.hasFolderAccess(app.userSerial)) {
+        LaunchedEffect(app.id) { onDismiss() }
+        return
+    }
     val context = LocalContext.current
     val density = LocalDensity.current
     val appear = remember { Animatable(0f) }
     LaunchedEffect(Unit) { appear.animateTo(1f, spring(dampingRatio = .74f, stiffness = Spring.StiffnessMediumLow)) }
     DisposableEffect(Unit) { LauncherSheetsOpen.intValue++; onDispose { LauncherSheetsOpen.intValue-- } }
-    val actions by produceState(emptyList<QuickAction>(), app.id) { value = withContext(Dispatchers.IO) { loadQuickActions(context, app, 4) } }
-    val notifications = IslandListenerService.notifications.collectAsStateWithLifecycle().value.filter { it.packageName == app.component.packageName }.take(3)
-    val media = (IslandListenerService.activity.collectAsStateWithLifecycle().value as? IslandActivity.Media)?.takeIf { it.packageName == app.component.packageName }
+    val protected = AppSecurity.isProtected(app)
+    val loadedActions by produceState(emptyList<QuickAction>(), app.id, protected) {
+        value = if (protected) emptyList() else withContext(Dispatchers.IO) { loadQuickActions(context, app, 4) }
+    }
+    val actions = loadedActions.takeUnless { protected }.orEmpty()
+    val notifications = IslandListenerService.notifications.collectAsStateWithLifecycle().value
+        .filter { !protected && it.packageName == app.component.packageName }.take(3)
+    val media = (IslandListenerService.activity.collectAsStateWithLifecycle().value as? IslandActivity.Media)
+        ?.takeIf { !protected && it.packageName == app.component.packageName }
 
     HomeDismissibleDialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         val view = LocalView.current
         LaunchedEffect(view) {
             (view.parent as? DialogWindowProvider)?.window?.let { w ->
                 w.setDimAmount(0f)
-                androidx.core.view.WindowCompat.getInsetsController(w, w.decorView).apply {
-                    systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                    hide(androidx.core.view.WindowInsetsCompat.Type.statusBars())
-                }
             }
         }
         var origin by remember { mutableStateOf(Offset.Zero) }
@@ -161,12 +167,15 @@ internal fun AppPanel(app: AppEntry, onDismiss: () -> Unit, onOpen: () -> Unit) 
                         if (index > 0) MenuDivider()
                         MenuRow(action.label, bitmap = action.icon) {
                             onDismiss()
-                            runCatching { context.getSystemService(LauncherApps::class.java).startShortcut(action.info, null, null) }
+                            AppSecurity.run(context, app.packageName, app.user) {
+                                runCatching { context.getSystemService(LauncherApps::class.java).startShortcut(action.info, null, null) }
+                            }
                         }
                     }
                 }
                 if (media == null && notifications.isEmpty() && actions.isEmpty())
-                    Text(stringResource(R.string.no_shortcuts_or_notifications_for_1, app.label), color = Color.White.copy(alpha = .6f), fontSize = FolioType.FOOTNOTE.sp)
+                    Text(if (protected) stringResource(R.string.security_required) else stringResource(R.string.no_shortcuts_or_notifications_for_1, app.label),
+                        color = Color.White.copy(alpha = .6f), fontSize = FolioType.FOOTNOTE.sp)
             }
         }
     }

@@ -1,15 +1,13 @@
 # Mr Folio
 
 Folio's Discord bot, application `1553079678988849294`. Phase 1 of the plan in
-`~/dev/folio-marketing/discord/BOT.md`: six read-only commands, no permissions, no state.
+`~/dev/folio-marketing/discord/BOT.md`: four read-only commands, no permissions, no state.
 
 | Command | Answers with | Read from |
 |---|---|---|
 | `/version` | The current release, its size and three links | GitHub's latest release |
 | `/changelog [version]` | Five headline changes, newest release by default | `CHANGELOG.md` |
-| `/roadmap [when]` | Next, Later and Exploring | `app/src/main/assets/roadmap.json` |
 | `/help [topic]` | The matching help page, or the list | foliolauncher.com's sitemap |
-| `/tweak [name]` | What a tweak does and which screens it runs on | `docs/sdk/source/index.json` |
 | `/screens <width>` | Whether a window that wide fits, and how many panes | `screen-matrix.json` |
 
 Every answer comes from a file the project already publishes, cached for five minutes, so the bot cannot tell anyone

@@ -96,55 +96,46 @@ internal fun ModalBottomSheet(
     fullScreen: Boolean = false,
     /** Widest the sheet gets when shown as a centered form sheet on a regular-size screen. */
     formWidth: androidx.compose.ui.unit.Dp = 560.dp,
+    hideOverlayWindows: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     if (!rememberHomePopupVisible(onDismiss = onDismissRequest)) return
     DisposableEffect(Unit) { LauncherSheetsOpen.intValue++; onDispose { LauncherSheetsOpen.intValue-- } }
-    if (fullScreen) { FullScreenPage(onDismissRequest, content); return }
+    if (fullScreen) { FullScreenPage(onDismissRequest, hideOverlayWindows, content); return }
     // Regular size (inner screen, either orientation): an iPad-style form sheet centered over Home instead of a stretched bottom sheet.
     val configuration = androidx.compose.ui.platform.LocalConfiguration.current
     if (configuration.fitsRegularHomeLayout()) {
         FormSheet(onDismissRequest, properties.shouldDismissOnBackPress, formWidth, modifier, content); return
     }
+    PopupBackdropScope { backdrop ->
     MaterialTheme(colorScheme = FolioSheetColors, typography = MaterialTheme.typography) {
         androidx.compose.material3.ModalBottomSheet(
-            onDismissRequest = onDismissRequest, modifier = modifier, sheetState = sheetState,
+            onDismissRequest = onDismissRequest, modifier = modifier.then(backdrop), sheetState = sheetState,
             shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
             containerColor = FolioColors.SecondaryBackground.copy(alpha = .97f), contentColor = Color.White,
             scrimColor = Color.Black.copy(alpha = .35f),
             dragHandle = { Box(Modifier.padding(top = FolioSpace.COMPACT.dp, bottom = FolioSpace.SNUG.dp).size(width = 36.dp, height = 5.dp)
                 .background(Color.White.copy(alpha = .3f), RoundedCornerShape(3.dp))) },
             properties = properties, content = {
-                // The sheet is its own window; hide the status bar there too so Home stays edge to edge.
-                val view = androidx.compose.ui.platform.LocalView.current
-                androidx.compose.runtime.LaunchedEffect(view) {
-                    (view.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window?.let { w ->
-                        androidx.core.view.WindowCompat.getInsetsController(w, w.decorView).apply {
-                            systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                            hide(androidx.core.view.WindowInsetsCompat.Type.statusBars())
-                        }
-                    }
-                }
+                ApplyDialogStatusBar()
                 content()
             },
         )
     }
+    }
 }
 
 @Composable
-private fun FullScreenPage(onDismissRequest: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+private fun FullScreenPage(onDismissRequest: () -> Unit, hideOverlayWindows: Boolean, content: @Composable ColumnScope.() -> Unit) {
     HomeDismissibleDialog(onDismissRequest = onDismissRequest,
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false,
             dismissOnBackPress = false)) {
         val view = androidx.compose.ui.platform.LocalView.current
-        androidx.compose.runtime.LaunchedEffect(view) {
+        androidx.compose.runtime.LaunchedEffect(view, hideOverlayWindows) {
             (view.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window?.let { w ->
                 w.setDimAmount(0f)
                 w.setWindowAnimations(0)
-                androidx.core.view.WindowCompat.getInsetsController(w, w.decorView).apply {
-                    systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                    hide(androidx.core.view.WindowInsetsCompat.Type.statusBars())
-                }
+                w.setHideOverlayWindows(hideOverlayWindows)
             }
         }
         val slide = rememberEntrance(stiffness = 500f, from = 1f, to = 0f)
@@ -249,38 +240,43 @@ private fun FormSheet(onDismissRequest: () -> Unit, dismissOnBack: Boolean, widt
 @Composable
 internal fun AlertDialog(onDismissRequest: () -> Unit, confirmButton: @Composable () -> Unit, modifier: Modifier = Modifier,
     dismissButton: (@Composable () -> Unit)? = null, title: (@Composable () -> Unit)? = null, text: (@Composable () -> Unit)? = null,
-    width: androidx.compose.ui.unit.Dp = 270.dp, textMaxHeight: androidx.compose.ui.unit.Dp = 420.dp) {
+    width: androidx.compose.ui.unit.Dp = 270.dp, textMaxHeight: androidx.compose.ui.unit.Dp = 420.dp, material: Boolean = false) {
     HomeDismissibleDialog(onDismissRequest = onDismissRequest,
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        FolioDialogWindow(dim = .3f)
+        FolioDialogWindow(dim = if (material) LocalBackgroundMaterial.current.scrimAlpha else .3f)
         val appear = rememberEntrance(stiffness = 900f, dampingRatio = .85f)
         val base = MaterialTheme.typography
-        // The accent's ink, not its fill: the alert is always dark, and a fill-weight color on its grey fails
-        // contrast (iOS blue measures 3.82:1 there).
-        val blue = LocalAccent.current.ink
+        val ink = if (material) FolioGlass.ink else Color.White
+        val panel = if (material) FolioGlass.panel else FolioColors.SheetSurface
+        val blue = if (material && !LocalDuoPalette.current.dark) LocalAccent.current.fill else LocalAccent.current.ink
+        val colors = if (material && !LocalDuoPalette.current.dark) androidx.compose.material3.lightColorScheme(
+            primary = blue, surface = panel.copy(alpha = 1f), onSurface = ink, onSurfaceVariant = ink.copy(alpha = .62f))
+            else FolioSheetColors.copy(primary = blue)
         fun buttons(weight: androidx.compose.ui.text.font.FontWeight) = base.copy(labelLarge = androidx.compose.ui.text.TextStyle(fontSize = FolioType.BODY.sp, fontWeight = weight))
         FoldAvoidingBox(Modifier.windowInsetsPadding(WindowInsets.safeDrawing), role = FoldRole.INFO) {
-            MaterialTheme(colorScheme = FolioSheetColors.copy(primary = blue), typography = base) {
+            MaterialTheme(colorScheme = colors, typography = base) {
                 androidx.compose.foundation.layout.Column(modifier.width(width)
                     .graphicsLayer { alpha = appear.value; scaleX = 1.12f - .12f * appear.value; scaleY = scaleX }
-                    .clip(RoundedCornerShape(FolioRadius.CARD.dp)).background(FolioColors.SheetSurface.copy(alpha = .98f))) {
+                    .clip(RoundedCornerShape(FolioRadius.CARD.dp))
+                    .then(if (material) Modifier.materialBackground(RoundedCornerShape(FolioRadius.CARD.dp), tint = panel)
+                        else Modifier.background(FolioColors.SheetSurface.copy(alpha = .98f)))) {
                     androidx.compose.foundation.layout.Column(Modifier.fillMaxWidth().weight(1f, fill = false).padding(start = FolioSpace.LARGE.dp, end = FolioSpace.LARGE.dp, top = 19.dp, bottom = FolioSpace.LARGE.dp),
                         horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally, verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(FolioSpace.TINY.dp)) {
-                        title?.let { androidx.compose.material3.ProvideTextStyle(androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = FolioType.BODY.sp,
+                        title?.let { androidx.compose.material3.ProvideTextStyle(androidx.compose.ui.text.TextStyle(color = ink, fontSize = FolioType.BODY.sp,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, textAlign = androidx.compose.ui.text.style.TextAlign.Center), it) }
-                        text?.let { androidx.compose.material3.ProvideTextStyle(androidx.compose.ui.text.TextStyle(color = Color.White.copy(alpha = .85f), fontSize = FolioType.FOOTNOTE.sp,
+                        text?.let { androidx.compose.material3.ProvideTextStyle(androidx.compose.ui.text.TextStyle(color = ink.copy(alpha = .85f), fontSize = FolioType.FOOTNOTE.sp,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center)) { Box(Modifier.heightIn(max = textMaxHeight)) { it() } } }
                     }
-                    androidx.compose.material3.HorizontalDivider(color = Color.White.copy(alpha = .16f), thickness = .5.dp)
+                    androidx.compose.material3.HorizontalDivider(color = ink.copy(alpha = .16f), thickness = .5.dp)
                     androidx.compose.foundation.layout.Row(Modifier.fillMaxWidth().height(androidx.compose.foundation.layout.IntrinsicSize.Min)) {
                         dismissButton?.let { dismiss ->
                             Box(Modifier.weight(1f).heightIn(min = 44.dp), contentAlignment = androidx.compose.ui.Alignment.Center) {
-                                MaterialTheme(colorScheme = FolioSheetColors.copy(primary = blue), typography = buttons(androidx.compose.ui.text.font.FontWeight.Normal), content = dismiss)
+                                MaterialTheme(colorScheme = colors, typography = buttons(androidx.compose.ui.text.font.FontWeight.Normal), content = dismiss)
                             }
-                            androidx.compose.material3.VerticalDivider(color = Color.White.copy(alpha = .16f), thickness = .5.dp)
+                            androidx.compose.material3.VerticalDivider(color = ink.copy(alpha = .16f), thickness = .5.dp)
                         }
                         Box(Modifier.weight(1f).heightIn(min = 44.dp), contentAlignment = androidx.compose.ui.Alignment.Center) {
-                            MaterialTheme(colorScheme = FolioSheetColors.copy(primary = blue), typography = buttons(androidx.compose.ui.text.font.FontWeight.SemiBold), content = confirmButton)
+                            MaterialTheme(colorScheme = colors, typography = buttons(androidx.compose.ui.text.font.FontWeight.SemiBold), content = confirmButton)
                         }
                     }
                 }
@@ -297,17 +293,13 @@ internal fun AlertDialog(onDismissRequest: () -> Unit, confirmButton: @Composabl
 internal fun FolioDialogWindow(dim: Float, blurRadiusDp: Int = 0) {
     val view = androidx.compose.ui.platform.LocalView.current
     val density = androidx.compose.ui.platform.LocalDensity.current
-    androidx.compose.runtime.LaunchedEffect(view) {
+    androidx.compose.runtime.LaunchedEffect(view, dim, blurRadiusDp, density) {
         (view.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window?.let { w ->
             w.setDimAmount(dim)
             w.setWindowAnimations(0)
             if (blurRadiusDp > 0) {
                 w.addFlags(android.view.WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
                 w.attributes = w.attributes.apply { blurBehindRadius = with(density) { blurRadiusDp.dp.roundToPx() } }
-            }
-            androidx.core.view.WindowCompat.getInsetsController(w, w.decorView).apply {
-                systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                hide(androidx.core.view.WindowInsetsCompat.Type.statusBars())
             }
         }
     }

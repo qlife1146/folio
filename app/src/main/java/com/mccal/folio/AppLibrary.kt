@@ -5,9 +5,11 @@ package com.mccal.folio
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -25,7 +27,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -36,6 +37,7 @@ import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /** Incremented to focus the All apps search field (e.g. after a middle swipe-down on Home). */
@@ -51,11 +53,13 @@ internal fun AppLibrary(
     onTurnOnWork: (Long) -> Unit = {},
     homeRequests: Int = 0,
     active: Boolean = true,
+    onOpenCategory: (LibraryCategory, List<AppEntry>) -> Unit = { _, _ -> },
 ) {
     val appOptionsLabel = stringResource(R.string.app_options)
     val glass = !editing
     val palette = LocalDuoPalette.current
-    val ink = if (glass) Ink else MaterialTheme.colorScheme.onSurface
+    val libraryForeground = LocalLibraryForeground.current
+    val ink = if (glass) FolioGlass.ink else MaterialTheme.colorScheme.onSurface
     val pinned = remember(state.homeSlots, state.leadingSlots) {
         (state.homeSlots.asSequence() + state.leadingSlots.asSequence()).filterNotNull().toSet()
     }
@@ -64,6 +68,7 @@ internal fun AppLibrary(
     val workSwitch = hasWork && state.libraryWork
     var showWork by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
+    val activity = androidx.activity.compose.LocalActivity.current
     val searchFocus = remember { androidx.compose.ui.focus.FocusRequester() }
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     val focusRequest = librarySearchFocusRequests.intValue
@@ -75,32 +80,72 @@ internal fun AppLibrary(
     }
     val listState = rememberLazyListState()
     val selectedProfile = if (showWork) state.profiles.firstOrNull { it.isWork } else state.profiles.firstOrNull { it.isPersonal }
-    val downloads = Installs.active.collectAsStateWithLifecycle().value.values.filter { it.newApp }.distinctBy { it.packageName }
+    val selectedSerial = selectedProfile?.userSerial ?: state.apps.firstOrNull { it.isWork == showWork }?.userSerial
+        ?: context.getSystemService(android.os.UserManager::class.java).getSerialNumberForUser(android.os.Process.myUserHandle())
+    val hiddenApps = state.apps.filter { it.userSerial == selectedSerial && AppSecurity.isHidden(it, state.appSecurity) && !it.isShortcut }
+        .distinctBy { it.packageName }.sortedWith(compareBy(java.text.Collator.getInstance()) { it.label })
+    var hiddenProfile by remember { mutableStateOf<Long?>(null) }
+    var hiddenFolderOpen by remember { mutableStateOf(false) }
+    val hiddenTitle = stringResource(R.string.security_hidden)
+    val authTitle = stringResource(R.string.security_auth_title)
+    val currentActive by rememberUpdatedState(active && !editing)
+    val currentProfile by rememberUpdatedState(selectedSerial)
+    val currentShowWork by rememberUpdatedState(showWork)
+    val currentHomeRequests by rememberUpdatedState(homeRequests)
+    val closeHidden = { hiddenFolderOpen = false }
+    val lockHidden = { hiddenFolderOpen = false; hiddenProfile = null; AppSecurity.closeFolder() }
+    LaunchedEffect(active, editing, homeRequests, showWork, selectedSerial) { lockHidden() }
+    LaunchedEffect(hiddenApps.size) { if (hiddenApps.size <= 4) hiddenFolderOpen = false }
+    DisposableEffect(Unit) { onDispose { if (hiddenProfile != null) AppSecurity.closeFolder() } }
+    val openHidden: () -> Unit = {
+        val requestedWork = showWork
+        val serial = selectedSerial
+        if (hiddenProfile == serial && AppSecurity.hasFolderAccess(serial)) hiddenFolderOpen = hiddenApps.size > 4
+        else if (activity != null) AppSecurity.authenticate(activity, authTitle, onSuccess = {
+            if (currentActive && currentShowWork == requestedWork && currentHomeRequests == homeRequests &&
+                currentProfile == serial) {
+                AppSecurity.openFolder(serial)
+                hiddenProfile = serial
+                hiddenFolderOpen = false
+            }
+        })
+    }
+    val downloads = Installs.active.collectAsStateWithLifecycle().value.values
+        .filter { it.newApp && !AppSecurity.isHidden(it.packageName) }.distinctBy { it.packageName }
     // Hidden apps stay out of the App Library entirely, like iOS; they're listed (after unlocking) in Settings.
-    val visibleApps = remember(state.apps, query, showWork, workSwitch, hasWork, state.hiddenApps, editing) {
+    val visibleApps = remember(state.apps, query, showWork, workSwitch, hasWork, state.hiddenApps, state.appSecurity, editing) {
         val text = query.trim()
         // A renamed app answers to both names here, the same as in Spotlight.
         state.apps.filter { (if (workSwitch) it.isWork == showWork else !(hasWork && it.isWork)) &&
-            (it.label.contains(text, true) || it.systemLabel.contains(text, true) || Pinyin.matches(it.label, text) || Pinyin.matches(it.systemLabel, text)) &&
-            (editing || it.id !in state.hiddenApps) }
+            matchesAppQuery(it, text) &&
+            (editing || it.id !in state.hiddenApps) && !AppSecurity.isHidden(it, state.appSecurity) &&
+            (!it.isShortcut || !AppSecurity.isProtected(it, state.appSecurity)) }
     }
     // iOS-style App Library: category tiles while browsing; the A–Z list for search, hidden and editing.
-    var openCategory by remember(homeRequests) { mutableStateOf<LibraryCategory?>(null) }
     val browsing = state.libraryCategories && !editing && query.isBlank()
-    val categorized by produceState(emptyMap<LibraryCategory, List<AppEntry>>(), visibleApps, browsing) {
+    val categorized by produceState(emptyMap<LibraryCategory, List<AppEntry>>(), visibleApps, browsing, state.appSecurity) {
         if (!browsing) return@produceState
         value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             val pm = context.packageManager
             val byId = visibleApps.associateBy { it.id }
-            val suggestions = RecentApps.load(context).mapNotNull(byId::get).take(8)
+            val suggestions = RecentApps.load(context).mapNotNull(byId::get).filterNot { AppSecurity.isProtected(it, state.appSecurity) }.take(8)
+            val recentlyInstalled = visibleApps.filter { !it.isShortcut }
+                .distinctBy { it.userSerial to it.packageName }
+                .sortedByDescending { it.firstInstallTime }.take(30)
             val grouped = visibleApps.groupBy { LibraryCategory.of(pm, it.component.packageName) }
                 .mapValues { (_, apps) -> apps.sortedWith(compareBy(java.text.Collator.getInstance()) { it.label }) }
             buildMap {
                 if (suggestions.isNotEmpty()) put(LibraryCategory.SUGGESTIONS, suggestions)
+                if (recentlyInstalled.isNotEmpty()) put(LibraryCategory.RECENTLY_INSTALLED, recentlyInstalled)
                 grouped.entries.sortedWith(compareBy({ it.key == LibraryCategory.OTHER }, { -it.value.size })).forEach { put(it.key, it.value) }
             }
         }
     }
+    // Security changes take effect immediately, before asynchronous category regrouping completes.
+    val visibleIds = visibleApps.mapTo(mutableSetOf()) { it.id }
+    val safeCategories = categorized.mapValues { (category, apps) ->
+        apps.filter { it.id in visibleIds && (category != LibraryCategory.SUGGESTIONS || !AppSecurity.isProtected(it, state.appSecurity)) }
+    }.filterValues { it.isNotEmpty() }
     // Reset retained pager content on entry, and after the initial category data replaces the A–Z rows.
     LaunchedEffect(active, homeRequests, browsing, categorized.isNotEmpty(), showWork, selectedProfile?.available, selectedProfile?.quiet) {
         listState.scrollToItem(index = 0, scrollOffset = 0)
@@ -110,18 +155,14 @@ internal fun AppLibrary(
             Pinyin.heading(it.label)
         }
     }
-    // Like iOS, a category opens as an expanded folder over the library instead of replacing it.
-    openCategory?.takeIf { browsing }?.let { category ->
-        CategoryFolder(stringResource(category.title), categorized[category].orEmpty(), onDismiss = { openCategory = null },
-            onLaunch = { openCategory = null; onLaunchFrom(it, null) }, onActions = { openCategory = null; onActions(it) })
-    }
-    Surface(modifier, shape = RoundedCornerShape(FolioRadius.PANEL.dp),
-        color = if (glass) Glass.copy(alpha = .48f) else MaterialTheme.colorScheme.surface,
-        contentColor = ink,
-        border = if (glass) BorderStroke(1.dp, Color.White.copy(alpha = .38f)) else null) {
-        Column(Modifier.background(Brush.verticalGradient(if (glass)
-            listOf(Color.White.copy(alpha = .09f), Color.Transparent) else listOf(Color.Transparent, Color.Transparent)))
-            .padding(horizontal = FolioSpace.LARGE.dp).padding(top = 18.dp)) {
+    LibraryForegroundContent(modifier, enabled = glass) { libraryModifier ->
+    val panelShape = RoundedCornerShape(FolioRadius.PANEL.dp)
+    Surface(libraryModifier.then(if (glass) Modifier.materialBackground(panelShape, tint = FolioGlass.panel) else Modifier)
+        .onGloballyPositioned { if (glass) libraryForeground?.panelBounds = it.boundsInRoot() },
+        shape = panelShape,
+        color = if (glass) Color.Transparent else MaterialTheme.colorScheme.surface,
+        contentColor = ink) {
+        Column(Modifier.padding(horizontal = FolioSpace.LARGE.dp).padding(top = 18.dp)) {
             // iOS App Library has no title bar, just its search field; choosing Home apps keeps a title and count.
             if (editing) Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.choose_home_apps_title), Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
@@ -133,7 +174,7 @@ internal fun AppLibrary(
             }
             IosSearchField(query, onQuery, if (editing) stringResource(R.string.search_apps) else stringResource(R.string.app_library), Modifier.padding(vertical = FolioSpace.MEDIUM.dp),
                 fieldModifier = (if (editing) Modifier else Modifier.focusRequester(searchFocus)).testTag(if (editing) "pin-search" else "library-search"),
-                ink = ink, onSearch = {
+                ink = ink, material = glass, onSearch = {
                     if (!editing && query.isNotBlank()) openWebSearch(context,
                         runCatching { WebSearchTarget.valueOf(state.searchEngine) }.getOrDefault(WebSearchTarget.GOOGLE), query)
                 })
@@ -152,20 +193,21 @@ internal fun AppLibrary(
                 if (!editing && query.isNotBlank()) item("web-search") {
                     WebSearchRow(query) { openWebSearch(context, it, query) }
                 }
-                if (browsing && categorized.isNotEmpty()) {
+                if (browsing && safeCategories.isNotEmpty()) {
                     // Tiles stay iPhone-sized: more columns on the wide inner screen instead of giant tiles.
                     val columns = libraryColumns(libraryWidth.value)
-                    items(categorized.entries.toList().chunked(columns), key = { row -> "cat-" + row.first().key.name }) { row ->
+                    items(safeCategories.entries.toList().chunked(columns), key = { row -> "cat-" + row.first().key.name }) { row ->
                         Row(Modifier.fillMaxWidth().padding(bottom = FolioSpace.COMFY.dp), horizontalArrangement = Arrangement.spacedBy(FolioSpace.COMFY.dp)) {
                             row.forEach { (cat, apps) ->
                                 CategoryCard(stringResource(cat.title), apps, Modifier.weight(1f), labelColor = ink,
-                                    onLaunch = { onLaunchFrom(it, null) }, onActions = onActions) { openCategory = cat }
+                                    drag = drag, page = page, category = cat,
+                                    onLaunch = { onLaunchFrom(it, null) }, onActions = onActions) { onOpenCategory(cat, apps) }
                             }
                             repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
                         }
                     }
                 } else if (groups.isEmpty()) item { Text(if (state.loading) stringResource(R.string.loading_apps) else stringResource(R.string.no_apps_found), Modifier.padding(vertical = FolioSpace.XL.dp)) }
-                if (!(browsing && categorized.isNotEmpty())) groups.forEach { (letter, entries) ->
+                if (!(browsing && safeCategories.isNotEmpty())) groups.forEach { (letter, entries) ->
                     stickyHeader(key = "heading-$letter") {
                         Row(Modifier.fillMaxWidth().padding(top = FolioSpace.SMALL.dp, bottom = FolioSpace.SNUG.dp), verticalAlignment = Alignment.CenterVertically) {
                             // An opaque small chip prevents text from showing through the sticky letter.
@@ -175,19 +217,25 @@ internal fun AppLibrary(
                                 RoundedCornerShape(FolioRadius.CONTROL.dp)), contentAlignment = Alignment.Center) {
                                 Text(letter, color = ink, fontWeight = FontWeight.SemiBold, fontSize = FolioType.GROUP_LABEL.sp)
                             }
-                            if (glass) HorizontalDivider(Modifier.weight(1f).padding(start = FolioSpace.COMPACT.dp), color = Color.White.copy(alpha = .24f))
+                            if (glass) HorizontalDivider(Modifier.weight(1f).padding(start = FolioSpace.COMPACT.dp), color = ink.copy(alpha = .24f))
                         }
                     }
                     items(entries, key = { it.id }) { app ->
                         val isPinned = app.id in pinned
                         val launchBounds = remember { android.graphics.Rect() }
+                        val interaction = remember(app.id) { MutableInteractionSource() }
+                        val pressed by interaction.collectIsPressedAsState()
                         val dragModifier = if (drag != null) Modifier.dropRegion(drag, DropTarget.Library(app.id), app.id, page) else Modifier
                         val click = { if (editing) onPin(app.id, !isPinned) else onLaunchFrom(app, launchBounds) }
                         Row(Modifier.fillMaxWidth().heightIn(min = 60.dp).then(dragModifier).clip(RoundedCornerShape(FolioRadius.CARD.dp)).testTag("library-app-${app.id}")
-                            .then(if (drag == null) Modifier.combinedClickable(onClick = click, onLongClick = { onActions(app) })
-                                else Modifier.clickable(onClick = click).semantics { onLongClick(appOptionsLabel) { onActions(app); true } })
+                            .then(if (drag == null) Modifier.combinedClickable(interactionSource = interaction, indication = null, onClick = click, onLongClick = { onActions(app) })
+                                else Modifier.clickable(interactionSource = interaction, indication = null, onClick = click).semantics { onLongClick(appOptionsLabel) { onActions(app); true } })
                             .padding(vertical = FolioSpace.SNUG.dp), verticalAlignment = Alignment.CenterVertically) {
                             AppIcon(app, null, Modifier.size(40.dp)
+                                .graphicsLayer {
+                                    alpha = if (pressed) .55f else 1f
+                                    compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.ModulateAlpha
+                                }
                                 .onGloballyPositioned { launchBounds.set(it.boundsInWindow().toAndroidBounds()) }.clip(RoundedCornerShape(FolioRadius.CONTROL.dp)))
                             Row(Modifier.weight(1f).padding(start = FolioSpace.MEDIUM.dp), verticalAlignment = Alignment.CenterVertically) {
                                 NewAppDot(app.packageName, 7.dp)
@@ -203,15 +251,34 @@ internal fun AppLibrary(
                         }
                     }
                 }
+                if (!editing && query.isBlank()) item("security-hidden") {
+                    val columns = libraryColumns(libraryWidth.value)
+                    Row(Modifier.fillMaxWidth().padding(bottom = FolioSpace.COMFY.dp),
+                        horizontalArrangement = Arrangement.spacedBy(FolioSpace.COMFY.dp)) {
+                        HiddenCategoryCard(hiddenTitle, Modifier.weight(1f), ink, openHidden,
+                            apps = hiddenApps.takeIf { active && hiddenProfile == selectedSerial && AppSecurity.hasFolderAccess(selectedSerial) },
+                            onLaunch = { if (AppSecurity.hasFolderAccess(selectedSerial)) onLaunchFrom(it, null) },
+                            onActions = { if (AppSecurity.hasFolderAccess(selectedSerial)) onActions(it) })
+                        repeat(columns - 1) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
             }
         }
+    }
+    }
+    hiddenProfile?.takeIf { hiddenFolderOpen && hiddenApps.size > 4 && active && !editing && it == selectedSerial && AppSecurity.hasFolderAccess(it) }?.let { serial ->
+        CategoryFolder(hiddenTitle, hiddenApps, drag = drag, page = page,
+            onDismiss = closeHidden,
+            onLaunch = { if (AppSecurity.hasFolderAccess(serial)) onLaunchFrom(it, null) },
+            onActions = { if (AppSecurity.hasFolderAccess(serial)) onActions(it) }, allowDrag = false)
     }
 }
 
 @Composable
 private fun WebSearchRow(query: String, onSearch: (WebSearchTarget) -> Unit) {
+    val ink = LocalContentColor.current
     Column(Modifier.fillMaxWidth().padding(bottom = FolioSpace.SMALL.dp)) {
-        Text(stringResource(R.string.search_1_with, query.trim()), fontSize = FolioType.GROUP_LABEL.sp, color = Ink.copy(alpha = .75f),
+        Text(stringResource(R.string.search_1_with, query.trim()), fontSize = FolioType.GROUP_LABEL.sp, color = LocalContentColor.current.copy(alpha = .75f),
             modifier = Modifier.padding(bottom = FolioSpace.SNUG.dp))
         Row(Modifier.fillMaxWidth().horizontalScroll(androidx.compose.foundation.rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(FolioSpace.SMALL.dp)) {
@@ -219,7 +286,8 @@ private fun WebSearchRow(query: String, onSearch: (WebSearchTarget) -> Unit) {
                 AssistChip(onClick = { onSearch(target) }, label = { Text(target.label) },
                     leadingIcon = { Icon(if (target.label.startsWith("Ask")) Icons.Rounded.AutoAwesome else Icons.Rounded.Public,
                         null, Modifier.size(16.dp)) },
-                    modifier = Modifier.testTag("web-search-${target.name.lowercase()}"))
+                    modifier = Modifier.testTag("web-search-${target.name.lowercase()}"),
+                    colors = AssistChipDefaults.assistChipColors(labelColor = ink, leadingIconContentColor = ink))
             }
         }
     }

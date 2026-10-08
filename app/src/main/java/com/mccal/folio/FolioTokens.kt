@@ -3,12 +3,12 @@ package com.mccal.folio
 import androidx.compose.ui.graphics.Color
 
 /**
- * Folio's shared colors: Apple's dark-appearance system colors, named once so screens, themes and Market packages all
+ * Folio's shared colors: Apple's dark-appearance system colors, named once so screens and saved appearance settings
  * point at the same values. Use these instead of writing hex colors in a screen.
  */
 internal object FolioColors {
     /**
-     * The palette as ARGB numbers, for the places that hold a color as a value rather than a `Color`: a tweak's
+     * The palette as ARGB numbers, for the places that hold a color as a value rather than a `Color`: media
      * tint, a Focus mode, a saved layout's icon tint. One source of truth, so a number and a color can't drift.
      */
     object Value {

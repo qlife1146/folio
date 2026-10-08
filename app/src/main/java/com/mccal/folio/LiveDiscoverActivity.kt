@@ -81,6 +81,10 @@ internal object LiveDiscover {
     internal var attachNativeFeed = true
 
     fun prepare(activity: MainActivity, bounds: Rect, width: Float) {
+        if (AppSecurity.isProtected(DiscoverClient.GOOGLE_PACKAGE, android.os.Process.myUserHandle())) {
+            message.value = activity.getString(R.string.security_required)
+            return
+        }
         if (!attachNativeFeed || externalResultOwners.isNotEmpty() || !DiscoverBounds.available || bounds.isEmpty ||
             activity.isFinishing || activity.isDestroyed ||
             !activity.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return
@@ -230,8 +234,8 @@ class LiveDiscoverActivity : ComponentActivity() {
         enableEdgeToEdge()
         window.setWindowAnimations(0)
         window.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
-        vertical = org.json.JSONObject(getSharedPreferences("launcher", 0).getString("state", "{}") ?: "{}").optBoolean("verticalStatus", true)
-        if (vertical) WindowCompat.getInsetsController(window, window.decorView).hide(WindowInsetsCompat.Type.statusBars())
+        vertical = !savedSystemStatusBarVisible()
+        window.setSystemStatusBarVisible(!vertical)
         setContentView(View(this))
         onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
             override fun handleOnBackPressed() { LiveDiscover.onHomeRequest?.invoke() }

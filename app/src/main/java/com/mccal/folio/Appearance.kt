@@ -2,7 +2,6 @@ package com.mccal.folio
 
 import android.content.Context
 import androidx.compose.runtime.*
-import java.time.*
 import android.content.BroadcastReceiver
 import android.content.Intent
 import android.content.IntentFilter
@@ -13,26 +12,18 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 
 enum class AppearanceMode { LIGHT, DARK, SYSTEM, SUNRISE_SUNSET }
-data class AppearanceState(val mode: AppearanceMode = AppearanceMode.LIGHT, val accent: AccentChoice = AccentChoice.FOLIO_TEAL, val place: String = "",
+data class AppearanceState(val mode: AppearanceMode = AppearanceMode.SYSTEM, val accent: AccentChoice = AccentChoice.FOLIO_TEAL, val place: String = "",
     val latitude: Double? = null, val longitude: Double? = null, val locationTime: Long = 0,
     val deviceLocation: Boolean = false, val dark: Boolean = false, val fallback: String? = null,
     val locationStatus: String? = null)
 
 class AppearanceStore(private val context: Context) {
-    private val prefs = context.getSharedPreferences("appearance", Context.MODE_PRIVATE)
     private fun currentSystemDark() = context.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK ==
         android.content.res.Configuration.UI_MODE_NIGHT_YES
     var state by mutableStateOf(load(currentSystemDark())); private set
     init { DuoAppearanceRuntime.dark = state.dark; DuoAppearanceRuntime.accent = state.accent }
-    private fun load(systemDark: Boolean): AppearanceState {
-        val mode = runCatching { AppearanceMode.valueOf(prefs.getString("mode", "LIGHT")!!) }.getOrDefault(AppearanceMode.LIGHT)
-        val accent = runCatching { AccentChoice.valueOf(prefs.getString("accent", "FOLIO_TEAL")!!) }.getOrDefault(AccentChoice.FOLIO_TEAL)
-        val lat = runCatching { prefs.getString("lat", null)?.toDoubleOrNull() }.getOrNull()
-        val lon = runCatching { prefs.getString("lon", null)?.toDoubleOrNull() }.getOrNull()
-        return resolve(AppearanceState(mode, accent, runCatching { prefs.getString("place", "") ?: "" }.getOrDefault(""), lat, lon,
-            runCatching { prefs.getLong("locationTime", 0) }.getOrDefault(0),
-            runCatching { prefs.getBoolean("deviceLocation", false) }.getOrDefault(false)), systemDark)
-    }
+    // Old preferences and imported appearance settings cannot override the device theme.
+    private fun load(systemDark: Boolean) = AppearanceState(dark = systemDark)
     fun setMode(mode: AppearanceMode, systemDark: Boolean) { save(state.copy(mode = mode), systemDark) }
     fun setAccent(accent: AccentChoice, systemDark: Boolean) { save(state.copy(accent = accent), systemDark) }
     fun setManual(place: String, latitude: Double, longitude: Double, systemDark: Boolean) {
@@ -46,32 +37,19 @@ class AppearanceStore(private val context: Context) {
     fun locationStatus(message: String?) { state = state.copy(locationStatus = message) }
     fun clearLocation(systemDark: Boolean) = save(state.copy(place = "", latitude = null, longitude = null,
         locationTime = 0, deviceLocation = false), systemDark)
-    fun refresh(systemDark: Boolean) { state = resolve(state, systemDark); DuoAppearanceRuntime.dark = state.dark }
+    fun refresh(systemDark: Boolean) {
+        state = load(systemDark)
+        DuoAppearanceRuntime.dark = state.dark
+        DuoAppearanceRuntime.accent = state.accent
+    }
     fun reloadFromPreferences(systemDark: Boolean = currentSystemDark()) {
         val transientStatus = state.locationStatus
         state = load(systemDark).copy(locationStatus = transientStatus)
         DuoAppearanceRuntime.dark = state.dark
-    }
-    private fun save(value: AppearanceState, systemDark: Boolean) {
-        prefs.edit().putString("mode", value.mode.name).putString("accent", value.accent.name).putString("place", value.place)
-            .putString("lat", value.latitude?.toString()).putString("lon", value.longitude?.toString())
-            .putLong("locationTime", value.locationTime).putBoolean("deviceLocation", value.deviceLocation).apply()
-        state = resolve(value, systemDark)
-        DuoAppearanceRuntime.dark = state.dark
         DuoAppearanceRuntime.accent = state.accent
     }
-    private fun resolve(value: AppearanceState, systemDark: Boolean): AppearanceState = when (value.mode) {
-        AppearanceMode.LIGHT -> value.copy(dark = false, fallback = null)
-        AppearanceMode.DARK -> value.copy(dark = true, fallback = null)
-        AppearanceMode.SYSTEM -> value.copy(dark = systemDark, fallback = null)
-        AppearanceMode.SUNRISE_SUNSET -> {
-            val lat = value.latitude; val lon = value.longitude
-            if (lat == null || lon == null) value.copy(dark = systemDark, fallback = "Using system theme until a location is set")
-            else if (value.deviceLocation && System.currentTimeMillis() - value.locationTime > 30L * 24 * 60 * 60 * 1000)
-                value.copy(dark = systemDark, fallback = "Using system theme because the device location is stale")
-            else runCatching { val now = ZonedDateTime.now(); value.copy(dark = solarSchedule(now.toLocalDate(), lat, lon, now.zone).isDark(now), fallback = null) }
-                .getOrElse { value.copy(dark = systemDark, fallback = "Using system theme because this location is unavailable") }
-        }
+    private fun save(value: AppearanceState, systemDark: Boolean) {
+        refresh(systemDark)
     }
 }
 
@@ -92,8 +70,11 @@ val LocalDuoPalette = staticCompositionLocalOf { LightDuoPalette }
 @Composable
 fun rememberSavedAppearance(): AppearanceState {
     val context = LocalContext.current
+    val systemDark = androidx.compose.ui.platform.LocalConfiguration.current.uiMode and
+        android.content.res.Configuration.UI_MODE_NIGHT_MASK == android.content.res.Configuration.UI_MODE_NIGHT_YES
     val lifecycleOwner = LocalLifecycleOwner.current
     val store = remember(context) { AppearanceStore(context.applicationContext) }
+    LaunchedEffect(store, systemDark) { store.refresh(systemDark) }
     DisposableEffect(context, store, lifecycleOwner) {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(receiverContext: Context?, intent: Intent?) { store.reloadFromPreferences() }

@@ -12,8 +12,6 @@ import android.net.Uri
 import android.provider.ContactsContract
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -26,8 +24,9 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -53,6 +52,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -66,16 +67,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import androidx.compose.runtime.withFrameNanos
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.layout.layout
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.collectLatest
 import androidx.compose.ui.graphics.graphicsLayer
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 
 /** Spotlight sections that can be turned off in settings. */
-internal enum class SpotlightSection(@androidx.annotation.StringRes val title: Int) { SUGGESTIONS(R.string.suggestions), CONTACTS(R.string.contacts), SETTINGS(R.string.settings), CALCULATOR(R.string.calculator), WEB(R.string.search_the_web_ask_ai) }
+internal enum class SpotlightSection(@androidx.annotation.StringRes val title: Int) {
+    SUGGESTIONS(R.string.suggestions), CONTACTS(R.string.contacts), CALENDAR(R.string.device_search_calendar),
+    PHOTOS(R.string.device_search_photos), FILES(R.string.device_search_files), SETTINGS(R.string.settings),
+    CALCULATOR(R.string.calculator), WEB(R.string.search_the_web_ask_ai)
+}
 
 /** Remembers the last apps launched from Folio, for Spotlight suggestions. Stays on the device. */
 internal object RecentApps {
@@ -113,7 +116,9 @@ internal object RecentApps {
 /** iOS-style Spotlight over Home: suggestions, apps, contacts, settings, calculator, web and AI. */
 @Composable
 internal fun SpotlightOverlay(visible: Boolean, progress: () -> Float, state: LauncherState, onClose: () -> Unit,
-    onLaunch: (AppEntry) -> Unit) {
+    onLaunch: (AppEntry) -> Unit, drag: HomeDragState, onAppMenu: (AppEntry) -> Unit,
+    fromBottom: Boolean = false, dismissImmediately: Boolean = false,
+    backgroundBlur: androidx.compose.ui.graphics.RenderEffect? = null) {
     BackHandler(visible) { onClose() }
     // Composed while visible or still animating out; every layer follows the one shared spring,
     // so scrim, content and the blurred Home behind always move together.
@@ -124,19 +129,43 @@ internal fun SpotlightOverlay(visible: Boolean, progress: () -> Float, state: La
     LaunchedEffect(visible) {
         if (!visible) { snapshotFlow { progress() }.first { it <= .001f }; composed = false }
     }
+    if (!visible && dismissImmediately) composed = false
     if (!composed) return
     val lift = with(androidx.compose.ui.platform.LocalDensity.current) { 24.dp.toPx() }
+    val close by rememberUpdatedState(onClose)
     Box(Modifier.fillMaxSize().graphicsLayer { alpha = progress() }.background(FolioGlass.scrim)
         .then(if (visible) Modifier.clickable(remember { MutableInteractionSource() }, null, onClick = onClose) else Modifier))
-    Box(Modifier.fillMaxSize().graphicsLayer {
+    Box(Modifier.fillMaxSize().pointerInput(visible) {
+        if (!visible) return@pointerInput
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            var blankTap = true
+            var current = down
+            do {
+                // Children handle clicks and scrolls first; only untouched blank taps close Spotlight.
+                val event = awaitPointerEvent(PointerEventPass.Final)
+                current = event.changes.firstOrNull { it.id == down.id } ?: break
+                if (event.changes.size > 1 || event.changes.any { it.isConsumed } ||
+                    (current.position - down.position).getDistance() > viewConfiguration.touchSlop) blankTap = false
+            } while (current.pressed)
+            if (blankTap && !current.pressed &&
+                current.uptimeMillis - down.uptimeMillis < viewConfiguration.longPressTimeoutMillis) {
+                current.consume()
+                close()
+            }
+        }
+    }.graphicsLayer {
         val p = progress()
-        alpha = p; translationY = -lift * (1f - p); scaleX = .96f + .04f * p; scaleY = scaleX
-        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(.5f, 0f)
-    }) { SpotlightContent(state, active = visible, onClose, onLaunch) }
+        renderEffect = backgroundBlur
+        alpha = p; translationY = (if (fromBottom) lift else -lift) * (1f - p)
+        scaleX = .96f + .04f * p; scaleY = scaleX
+        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(.5f, if (fromBottom) 1f else 0f)
+    }) { SpotlightContent(state, active = visible, onClose, onLaunch, drag, onAppMenu) }
 }
 
 @Composable
-private fun SpotlightContent(state: LauncherState, active: Boolean, onClose: () -> Unit, onLaunch: (AppEntry) -> Unit) {
+private fun SpotlightContent(state: LauncherState, active: Boolean, onClose: () -> Unit,
+    onLaunch: (AppEntry) -> Unit, drag: HomeDragState, onAppMenu: (AppEntry) -> Unit) {
     val context = LocalContext.current
     var query by remember { mutableStateOf("") }
     val focus = remember { FocusRequester() }
@@ -145,9 +174,11 @@ private fun SpotlightContent(state: LauncherState, active: Boolean, onClose: () 
     val windowInfo = androidx.compose.ui.platform.LocalWindowInfo.current
     val view = androidx.compose.ui.platform.LocalView.current
     var fieldFocused by remember { mutableStateOf(false) }
+    var keyboardDismissed by remember { mutableStateOf(false) }
     val imeVisible = WindowInsets.isImeVisible
     /** Focus the field and raise the keyboard, falling back to the window's IME controller. */
     suspend fun raiseKeyboard() {
+        if (keyboardDismissed) return
         // Android ignores keyboard requests from a window without focus (e.g. right after the side-key
         // picker, a panel or a menu closes), so wait for it first.
         snapshotFlow { windowInfo.isWindowFocused }.first { it }
@@ -155,10 +186,12 @@ private fun SpotlightContent(state: LauncherState, active: Boolean, onClose: () 
         // Up to about 1.5 s: a busy first frame (just after Home starts) can leave the field unattached for a while.
         repeat(20) { attempt ->
             kotlinx.coroutines.delay(if (attempt == 0) 90 else 70)
+            if (keyboardDismissed) return
             runCatching { focus.requestFocus() }
             if (fieldFocused) {
                 keyboard?.show()
                 kotlinx.coroutines.delay(260)
+                if (keyboardDismissed) return
                 if (!WindowInsetsHolderIme.visible(view)) runCatching {
                     context.asActivity()?.window?.let { w ->
                         androidx.core.view.WindowCompat.getInsetsController(w, view).show(androidx.core.view.WindowInsetsCompat.Type.ime())
@@ -171,48 +204,32 @@ private fun SpotlightContent(state: LauncherState, active: Boolean, onClose: () 
     LaunchedEffect(active) {
         // Keyboard only after Spotlight's first frames are on screen and the field is attached
         // (idea credited to QuickLaunch).
-        if (active) raiseKeyboard() else { query = ""; focusManager.clearFocus(force = true) }
+        if (active) { keyboardDismissed = false; raiseKeyboard() }
+        else { query = ""; focusManager.clearFocus(force = true) }
     }
     // Coming back to Spotlight (permission prompt, shade, app switch) brings the keyboard back.
     LaunchedEffect(active, windowInfo.isWindowFocused) {
-        if (active && windowInfo.isWindowFocused && !imeVisible) {
+        if (active && windowInfo.isWindowFocused && !imeVisible && !keyboardDismissed) {
             kotlinx.coroutines.delay(150)
+            if (keyboardDismissed) return@LaunchedEffect
             // If focus never landed (the window lost focus while Spotlight opened), try again from the start.
             if (fieldFocused) keyboard?.show() else raiseKeyboard()
-        }
-    }
-    // Hiding the keyboard (Back, or the keyboard's own hide button) dismisses Spotlight too, like iOS: the keyboard is
-    // Spotlight's input, so once it's gone the search is over. Only while Folio has window focus, so a permission
-    // prompt or the notification shade doesn't close it.
-    // isImeVisible alone can lag on some keyboards; the keyboard's target height is updated as soon as it starts moving.
-    val imeTarget = WindowInsets.imeAnimationTarget.getBottom(androidx.compose.ui.platform.LocalDensity.current) > 0
-    val imeState = androidx.compose.runtime.rememberUpdatedState(imeVisible || imeTarget)
-    val configState = androidx.compose.runtime.rememberUpdatedState(LocalConfiguration.current.let { Triple(it.orientation, it.screenWidthDp, it.screenHeightDp) })
-    LaunchedEffect(active) {
-        if (!active) return@LaunchedEffect
-        var wasUp = false
-        snapshotFlow { imeState.value }.collectLatest { up ->
-            if (up) { wasUp = true; return@collectLatest }
-            if (!wasUp) return@collectLatest
-            // The keyboard also drops for a moment when folding, rotating or switching to voice typing; only a
-            // keyboard that stays down (and a window that kept focus and size) means the user dismissed it.
-            val config = configState.value
-            kotlinx.coroutines.delay(450)
-            if (!imeState.value && windowInfo.isWindowFocused && configState.value == config) {
-                wasUp = false; focusManager.clearFocus(force = true); onClose()
-            }
         }
     }
     var frecency by remember { mutableStateOf(emptyMap<String, Double>()) }
     LaunchedEffect(active) { if (active) frecency = withContext(Dispatchers.IO) { RecentApps.frecency(context) } }
     val wide = LocalConfiguration.current.fitsRegularHomeLayout()
 
-    val apps = remember(state.apps, state.hiddenApps) { state.apps.filter { it.id !in state.hiddenApps } }
+    val apps = remember(state.apps, state.hiddenApps, state.appSecurity) {
+        state.apps.filter { it.id !in state.hiddenApps && !AppSecurity.isHidden(it, state.appSecurity) &&
+            (!it.isShortcut || !AppSecurity.isProtected(it, state.appSecurity)) }
+    }
+    val suggestionApps = remember(apps, state.appSecurity) { apps.filterNot { AppSecurity.isProtected(it, state.appSecurity) } }
     // Suggestions for this time of day first, then recent and dock apps to fill the row.
-    val timely by produceState(emptyList<AppEntry>(), apps, active) { if (active) value = withContext(Dispatchers.IO) { Suggestions.forNow(context, apps) } }
-    val recent = remember(apps, frecency, timely) {
-        val byId = apps.associateBy { it.id }
-        (timely + frecency.entries.sortedByDescending { it.value }.mapNotNull { byId[it.key] } +
+    val timely by produceState(emptyList<AppEntry>(), suggestionApps, active) { if (active) value = withContext(Dispatchers.IO) { Suggestions.forNow(context, suggestionApps) } }
+    val recent = remember(suggestionApps, frecency, timely, state.dock) {
+        val byId = suggestionApps.associateBy { it.id }
+        (timely.filter { it.id in byId } + frecency.entries.sortedByDescending { it.value }.mapNotNull { byId[it.key] } +
             RecentApps.load(context).mapNotNull(byId::get) + state.dock.mapNotNull { it?.let(byId::get) }).distinctBy { it.id }.take(8)
     }
     val q = query.trim()
@@ -222,121 +239,138 @@ private fun SpotlightContent(state: LauncherState, active: Boolean, onClose: () 
     val shortcuts = remember(context) { settingShortcuts(context) }
     val settingHits = remember(q, shortcuts) { if (q.length < 2) emptyList() else shortcuts.filter { it.matches(q) }.take(4) }
     val math = remember(q) { evaluateMath(q) }
-    var contactsGranted by remember { mutableStateOf(context.checkSelfPermission(Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) }
-    val contactsPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { contactsGranted = it }
-    val contacts by produceState(emptyList<ContactHit>(), q, contactsGranted) {
-        if (contactsGranted && q.length >= 2) kotlinx.coroutines.delay(150) // debounce typing
-        value = if (contactsGranted && q.length >= 2) withContext(Dispatchers.IO) { queryContacts(context, q) } else emptyList()
+    val contactsGranted = context.checkSelfPermission(Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
+    val contacts by key(q, contactsGranted, active) {
+        produceState(emptyList<ContactHit>()) {
+            if (active && contactsGranted && q.length >= 2) {
+                kotlinx.coroutines.delay(150) // debounce typing
+                value = withContext(Dispatchers.IO) { queryContacts(context, q) }
+            }
+        }
     }
-    val launch = { app: AppEntry -> RecentApps.record(context, app.id); onClose(); onLaunch(app) }
-    val start = { intent: Intent -> onClose(); runCatching { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }; Unit }
+    val launch = { app: AppEntry -> onClose(); onLaunch(app) }
+    val start = { intent: Intent -> onClose(); runCatching { AppSecurity.startActivity(context, intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }; Unit }
 
     // imeAnimationTarget changes once per keyboard show/hide (not every animation frame), so results
     // re-layout a single time instead of on each frame of the keyboard sliding in.
     // Half folded, Spotlight moves off the hinge like iPhone Duo's system panels.
     FoldAvoidingBox(contentAlignment = Alignment.TopCenter) {
-    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.folioSafeTop).windowInsetsPadding(WindowInsets.imeAnimationTarget).padding(horizontal = FolioSpace.LARGE.dp).padding(top = 18.dp),
+    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.folioSafeTop).windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.imeAnimationTarget)).padding(horizontal = FolioSpace.LARGE.dp).padding(top = 18.dp, bottom = FolioSpace.SMALL.dp),
         horizontalAlignment = Alignment.CenterHorizontally) {
         // A readable column on big screens (iPad Spotlight floats at about this width) rather than stretching edge to edge.
-        Column(Modifier.widthIn(max = 680.dp).fillMaxWidth().testTag("spotlight"),
+        Column(Modifier.widthIn(max = 680.dp).fillMaxSize().testTag("spotlight"),
             verticalArrangement = Arrangement.spacedBy(FolioSpace.COMFY.dp)) {
-            // Search field
-            val fieldScope = rememberCoroutineScope()
-            // iOS: the search capsule with Cancel beside it.
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Row(Modifier.weight(1f).clip(RoundedCornerShape(18.dp)).background(SpotGlass)
-                .border(FolioGlass.edge, RoundedCornerShape(18.dp))
-                // The whole capsule is the tap target, not just the text line.
-                .clickable(remember { MutableInteractionSource() }, null) { fieldScope.launch { raiseKeyboard() } }
-                // Fixed height: the capsule doesn't grow or jump when the clear button appears.
-                .heightIn(min = 52.dp).padding(start = FolioSpace.COMFY.dp, end = FolioSpace.TINY.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.Search, null, tint = Color.White.copy(alpha = .75f), modifier = Modifier.size(22.dp))
-                Spacer(Modifier.width(10.dp))
-                Box(Modifier.weight(1f)) {
-                    if (query.isEmpty()) Text(stringResource(R.string.search), color = Color.White.copy(alpha = .55f), fontSize = 18.sp)
-                    BasicTextField(query, { query = it }, Modifier.fillMaxWidth().focusRequester(focus)
-                        .onFocusChanged { fieldFocused = it.isFocused }.testTag("spotlight-field"),
-                        singleLine = true, textStyle = TextStyle(color = Color.White, fontSize = 18.sp), cursorBrush = SolidColor(Color.White),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                        keyboardActions = KeyboardActions(onSearch = {
-                            when {
-                                appHits.isNotEmpty() -> launch(appHits.first())
-                                q.isNotEmpty() -> { onClose(); openWebSearch(context, engine, q) }
-                            }
-                        }))
-                }
-                if (query.isNotEmpty()) Box(Modifier.size(44.dp).clip(CircleShape).clickable { query = "" }, contentAlignment = Alignment.Center) {
-                    Icon(Icons.Rounded.Cancel, "Clear", tint = Color.White.copy(alpha = .6f), modifier = Modifier.size(20.dp))
-                }
-            }
-            Text(stringResource(R.string.cancel), color = Color.White, fontSize = FolioType.BODY.sp,
-                modifier = Modifier.padding(start = FolioSpace.HAIR.dp).heightIn(min = 48.dp).clip(RoundedCornerShape(FolioRadius.CONTROL.dp))
-                    .clickable { focusManager.clearFocus(force = true); keyboard?.hide(); onClose() }
-                    .padding(horizontal = FolioSpace.MEDIUM.dp, vertical = FolioSpace.COMFY.dp).testTag("spotlight-cancel"))
-            }
-
-            val resultsState = androidx.compose.foundation.lazy.rememberLazyListState()
-            LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false).edgeFade(resultsState), state = resultsState, verticalArrangement = Arrangement.spacedBy(FolioSpace.COMFY.dp),
+            val resultsState = remember(active, q) { androidx.compose.foundation.lazy.LazyListState(0, 0) }
+            LazyColumn(Modifier.fillMaxWidth().weight(1f).edgeFade(resultsState), state = resultsState,
                 contentPadding = PaddingValues(bottom = 24.dp)) {
-                if (q.isEmpty()) {
-                    if (shows(SpotlightSection.SUGGESTIONS) && recent.isNotEmpty()) item("suggestions") {
-                        Section(stringResource(R.string.suggestions)) { AppGrid(recent, launch, fullRows = true) }
-                    }
-                } else {
-                    math?.takeIf { shows(SpotlightSection.CALCULATOR) }?.let { result -> item("math") {
-                        Section(stringResource(R.string.calculator)) {
-                            ResultRow(Icons.Rounded.Calculate, "= $result", q) {
-                                val clip = context.getSystemService(android.content.ClipboardManager::class.java)
-                                clip.setPrimaryClip(android.content.ClipData.newPlainText("Result", result))
+                // A fixed result container keeps asynchronous sections from shifting the scroll anchor.
+                item("results") {
+                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(FolioSpace.COMFY.dp)) {
+                        if (q.isEmpty()) {
+                            if (shows(SpotlightSection.SUGGESTIONS) && recent.isNotEmpty()) {
+                                SpotlightSectionCard(stringResource(R.string.suggestions)) {
+                                    AppGrid(recent, launch, drag, onAppMenu, "suggestions", fullRows = true)
+                                }
                             }
-                        }
-                    } }
-                    appHits.firstOrNull()?.let { top -> item("top") {
-                        Section(stringResource(R.string.top_hit)) { TopHit(top) { launch(top) } }
-                    } }
-                    if (appHits.size > 1) item("apps") { Section(stringResource(R.string.apps)) { AppGrid(appHits.drop(1).take(8), launch) } }
-                    if (shows(SpotlightSection.CONTACTS) && contacts.isNotEmpty()) item("contacts") {
-                        Section(stringResource(R.string.contacts)) { contacts.forEach { c ->
-                            ResultRow(Icons.Rounded.Person, c.name, c.address, trailing = c.address?.let { address -> {
-                                // iPhone-style quick actions: message (default texting app or OpenBubbles) and call.
-                                if (!address.contains('@')) SpotlightRoundAction(Icons.Rounded.Call, "Call ${c.name}") {
-                                    start(Intent(Intent.ACTION_DIAL, Uri.fromParts("tel", address, null)))
+                        } else {
+                            math?.takeIf { shows(SpotlightSection.CALCULATOR) }?.let { result ->
+                                SpotlightSectionCard(stringResource(R.string.calculator)) {
+                                    SpotlightResultRow(Icons.Rounded.Calculate, "= $result", q) {
+                                        val clip = context.getSystemService(android.content.ClipboardManager::class.java)
+                                        clip.setPrimaryClip(android.content.ClipData.newPlainText("Result", result))
+                                    }
                                 }
-                                SpotlightRoundAction(Icons.Rounded.ChatBubble, "Message ${c.name}") {
-                                    Messaging.conversationIntent(context, state.messagesApp, address)?.let(start)
-                                }
-                            } }) { start(Intent(Intent.ACTION_VIEW, c.uri)) }
-                        } }
-                    } else if (shows(SpotlightSection.CONTACTS) && !contactsGranted && q.length >= 2) item("contacts-permission") {
-                        Section(stringResource(R.string.contacts)) { ResultRow(Icons.Rounded.PersonSearch, stringResource(R.string.search_your_contacts), stringResource(R.string.allow_contacts_access)) {
-                            contactsPermission.launch(Manifest.permission.READ_CONTACTS)
-                        } }
-                    }
-                    if (shows(SpotlightSection.SETTINGS) && settingHits.isNotEmpty()) item("settings") {
-                        Section(stringResource(R.string.settings)) { settingHits.forEach { s -> ResultRow(Icons.Rounded.Settings, s.title, stringResource(R.string.settings)) { start(Intent(s.action)) } } }
-                    }
-                    if (shows(SpotlightSection.WEB)) item("web") {
-                        Section(stringResource(R.string.search_the_web_ask_ai)) {
-                            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(FolioSpace.SMALL.dp)) {
-                                WebSearchTarget.entries.forEach { target ->
-                                    Row(Modifier.clip(RoundedCornerShape(50)).background(SpotGlass)
-                                        .clickable { onClose(); openWebSearch(context, target, q) }
-                                        .padding(horizontal = FolioSpace.COMFY.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(if (target.label.startsWith("Ask")) Icons.Rounded.AutoAwesome else Icons.Rounded.Public, null,
-                                            tint = Color.White, modifier = Modifier.size(16.dp))
-                                        Spacer(Modifier.width(6.dp))
-                                        Text(target.label, color = Color.White, fontSize = 14.sp)
+                            }
+                            appHits.firstOrNull()?.let { top ->
+                                SpotlightSectionCard(stringResource(R.string.top_hit)) { TopHit(top, drag, onAppMenu) { launch(top) } }
+                            }
+                            if (appHits.size > 1) SpotlightSectionCard(stringResource(R.string.apps)) {
+                                AppGrid(appHits.drop(1).take(8), launch, drag, onAppMenu, "hits")
+                            }
+                            if (shows(SpotlightSection.CONTACTS) && contacts.isNotEmpty()) {
+                                SpotlightSectionCard(stringResource(R.string.contacts)) { contacts.forEach { c ->
+                                    SpotlightResultRow(Icons.Rounded.Person, c.name, c.address, trailing = c.address?.let { address -> {
+                                        // iPhone-style quick actions: message (default texting app or OpenBubbles) and call.
+                                        if (!address.contains('@')) SpotlightRoundAction(Icons.Rounded.Call, "Call ${c.name}") {
+                                            start(Intent(Intent.ACTION_DIAL, Uri.fromParts("tel", address, null)))
+                                        }
+                                        SpotlightRoundAction(Icons.Rounded.ChatBubble, "Message ${c.name}") {
+                                            Messaging.conversationIntent(context, state.messagesApp, address)?.let(start)
+                                        }
+                                    } }) { start(Intent(Intent.ACTION_VIEW, c.uri)) }
+                                } }
+                            }
+                            SpotlightDeviceSearch(q, active, state.spotlightHidden, onClose = onClose)
+                            if (shows(SpotlightSection.SETTINGS) && settingHits.isNotEmpty()) {
+                                SpotlightSectionCard(stringResource(R.string.settings)) { settingHits.forEach { s -> SpotlightResultRow(Icons.Rounded.Settings, s.title, stringResource(R.string.settings)) { start(Intent(s.action)) } } }
+                            }
+                            if (shows(SpotlightSection.WEB)) {
+                                SpotlightSectionCard(stringResource(R.string.search_the_web_ask_ai)) {
+                                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(FolioSpace.SMALL.dp)) {
+                                        Row(Modifier.clip(RoundedCornerShape(50)).background(SpotGlass)
+                                            .clickable { onClose(); openPlayStoreSearch(context, q) }
+                                            .padding(horizontal = FolioSpace.COMFY.dp, vertical = 9.dp)
+                                            .testTag("spotlight-play-store"), verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Rounded.Shop, null, tint = FolioGlass.ink, modifier = Modifier.size(16.dp))
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(stringResource(R.string.search_in_play_store), color = FolioGlass.ink, fontSize = 14.sp)
+                                        }
+                                        WebSearchTarget.entries.forEach { target ->
+                                            Row(Modifier.clip(RoundedCornerShape(50)).background(SpotGlass)
+                                                .clickable { onClose(); openWebSearch(context, target, q) }
+                                                .padding(horizontal = FolioSpace.COMFY.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(if (target.label.startsWith("Ask")) Icons.Rounded.AutoAwesome else Icons.Rounded.Public, null,
+                                                    tint = FolioGlass.ink, modifier = Modifier.size(16.dp))
+                                                Spacer(Modifier.width(6.dp))
+                                                Text(target.label, color = FolioGlass.ink, fontSize = 14.sp)
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                    if (math == null && appHits.isEmpty() && contacts.isEmpty() && settingHits.isEmpty()) item("none") {
-                        Text(stringResource(R.string.no_results_on_this_phone), color = Color.White.copy(alpha = .6f), fontSize = FolioType.FOOTNOTE.sp,
-                            textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-                    }
                 }
+            }
+
+            // Search field
+            val fieldScope = rememberCoroutineScope()
+            // iOS: the search capsule with Cancel beside it.
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.weight(1f).clip(RoundedCornerShape(18.dp)).materialBackground(RoundedCornerShape(18.dp), tint = SpotGlass)
+                // The whole capsule is the tap target, not just the text line.
+                .clickable(remember { MutableInteractionSource() }, null) {
+                    keyboardDismissed = false
+                    fieldScope.launch { raiseKeyboard() }
+                }
+                // Fixed height: the capsule doesn't grow or jump when the clear button appears.
+                .heightIn(min = 52.dp).padding(start = FolioSpace.COMFY.dp, end = FolioSpace.TINY.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.Search, null, tint = FolioGlass.ink.copy(alpha = .75f), modifier = Modifier.size(22.dp))
+                Spacer(Modifier.width(10.dp))
+                Box(Modifier.weight(1f)) {
+                    if (query.isEmpty()) Text(stringResource(R.string.search), color = FolioGlass.ink.copy(alpha = .55f), fontSize = 18.sp)
+                    BasicTextField(query, { query = it }, Modifier.fillMaxWidth().focusRequester(focus)
+                        .onFocusChanged {
+                            fieldFocused = it.isFocused
+                            if (it.isFocused) keyboardDismissed = false
+                        }.testTag("spotlight-field"),
+                        singleLine = true, textStyle = TextStyle(color = FolioGlass.ink, fontSize = 18.sp), cursorBrush = SolidColor(FolioGlass.ink),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = {
+                            keyboardDismissed = true
+                            focusManager.clearFocus(force = true)
+                            keyboard?.hide()
+                        }))
+                }
+                if (query.isNotEmpty()) Box(Modifier.size(44.dp).clip(CircleShape).clickable { query = "" }, contentAlignment = Alignment.Center) {
+                    Icon(Icons.Rounded.Cancel, "Clear", tint = FolioGlass.ink.copy(alpha = .6f), modifier = Modifier.size(20.dp))
+                }
+            }
+            Text(stringResource(R.string.cancel), color = FolioGlass.ink, fontSize = FolioType.BODY.sp,
+                modifier = Modifier.padding(start = FolioSpace.HAIR.dp).heightIn(min = 48.dp).clip(RoundedCornerShape(FolioRadius.CONTROL.dp))
+                    .clickable { focusManager.clearFocus(force = true); keyboard?.hide(); onClose() }
+                    .padding(horizontal = FolioSpace.MEDIUM.dp, vertical = FolioSpace.COMFY.dp).testTag("spotlight-cancel"))
             }
         }
     }
@@ -344,18 +378,19 @@ private fun SpotlightContent(state: LauncherState, active: Boolean, onClose: () 
 }
 
 @Composable
-private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) {
+internal fun SpotlightSectionCard(title: String, content: @Composable ColumnScope.() -> Unit) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(FolioSpace.SMALL.dp)) {
-        Text(title, color = FolioGlass.secondary, fontSize = FolioType.FOOTNOTE.sp, fontWeight = FontWeight.SemiBold,
+        Text(title, color = FolioGlass.secondaryInk, fontSize = FolioType.FOOTNOTE.sp, fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(start = FolioSpace.TINY.dp))
-        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(FolioRadius.GROUPED_CARD.dp)).background(SpotGlass)
-            .border(FolioGlass.edge, RoundedCornerShape(FolioRadius.GROUPED_CARD.dp)).padding(FolioSpace.COMPACT.dp),
+        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(FolioRadius.GROUPED_CARD.dp))
+            .materialBackground(RoundedCornerShape(FolioRadius.GROUPED_CARD.dp), tint = SpotGlass).padding(FolioSpace.COMPACT.dp),
             verticalArrangement = Arrangement.spacedBy(FolioSpace.HAIR.dp), content = content)
     }
 }
 
 @Composable
-private fun AppGrid(apps: List<AppEntry>, onLaunch: (AppEntry) -> Unit, fullRows: Boolean = false) {
+private fun AppGrid(apps: List<AppEntry>, onLaunch: (AppEntry) -> Unit, drag: HomeDragState,
+    onAppMenu: (AppEntry) -> Unit, instance: String, fullRows: Boolean = false) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         // As many ~84dp app cells as fit (four on a phone, up to eight on a wide column).
         val columns = evenColumnsOnHinge((maxWidth / 84.dp).toInt().coerceIn(4, 8), 4)
@@ -365,16 +400,15 @@ private fun AppGrid(apps: List<AppEntry>, onLaunch: (AppEntry) -> Unit, fullRows
             shown.chunked(columns).forEach { row ->
                 Row(Modifier.fillMaxWidth()) {
                     row.forEach { app ->
-                        val view = androidx.compose.ui.platform.LocalView.current
-                        val ctx = LocalContext.current
                         Column(Modifier.weight(1f).clip(RoundedCornerShape(FolioRadius.CARD.dp))
-                            .combinedClickable(onClick = { onLaunch(app) }, onLongClick = {
-                                // Long-press to drag into split screen beside the app that's open.
-                                startSplitDrag(view, ctx, app.component, app.user, app.label, app.icon)
-                            }).padding(vertical = FolioSpace.SNUG.dp),
+                            .clickable(remember { MutableInteractionSource() }, null) { onLaunch(app) }
+                            .padding(vertical = FolioSpace.SNUG.dp),
                             horizontalAlignment = Alignment.CenterHorizontally) {
-                            AppIcon(app, app.label, Modifier.size(52.dp).clip(RoundedCornerShape(13.dp)))
-                            Text(app.label, color = Color.White, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            AppIcon(app, app.label, Modifier.size(52.dp)
+                                .libraryAppInteraction(app, drag, null, "spotlight:$instance", scope = SPOTLIGHT_DRAG_SCOPE,
+                                    onLaunch = onLaunch, onActions = onAppMenu)
+                                .clip(RoundedCornerShape(13.dp)))
+                            Text(app.label, color = FolioGlass.ink, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.padding(top = FolioSpace.TINY.dp, start = FolioSpace.HAIR.dp, end = FolioSpace.HAIR.dp))
                         }
                     }
@@ -386,31 +420,35 @@ private fun AppGrid(apps: List<AppEntry>, onLaunch: (AppEntry) -> Unit, fullRows
 }
 
 @Composable
-private fun TopHit(app: AppEntry, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(FolioRadius.CARD.dp)).clickable(onClick = onClick).padding(FolioSpace.SMALL.dp),
+private fun TopHit(app: AppEntry, drag: HomeDragState, onAppMenu: (AppEntry) -> Unit, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(FolioRadius.CARD.dp))
+        .clickable(remember { MutableInteractionSource() }, null, onClick = onClick).padding(FolioSpace.SMALL.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        AppIcon(app, null, Modifier.size(56.dp).clip(RoundedCornerShape(FolioRadius.CARD.dp)))
+        AppIcon(app, null, Modifier.size(56.dp)
+            .libraryAppInteraction(app, drag, null, "spotlight:top", scope = SPOTLIGHT_DRAG_SCOPE,
+                onLaunch = { onClick() }, onActions = onAppMenu)
+            .clip(RoundedCornerShape(FolioRadius.CARD.dp)))
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
-            Text(app.label, color = Color.White, fontSize = FolioType.BODY.sp, fontWeight = FontWeight.SemiBold)
-            Text(if (app.profileLabel == stringResource(R.string.personal)) stringResource(R.string.application) else "${app.profileLabel} app", color = Color.White.copy(alpha = .6f), fontSize = FolioType.FOOTNOTE.sp)
+            Text(app.label, color = FolioGlass.ink, fontSize = FolioType.BODY.sp, fontWeight = FontWeight.SemiBold)
+            Text(if (app.profileLabel == stringResource(R.string.personal)) stringResource(R.string.application) else "${app.profileLabel} app", color = FolioGlass.ink.copy(alpha = .6f), fontSize = FolioType.FOOTNOTE.sp)
         }
-        Text(stringResource(R.string.open), color = Color.White, fontSize = FolioType.FOOTNOTE.sp, fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.clip(RoundedCornerShape(50)).background(Color.White.copy(alpha = .18f)).padding(horizontal = FolioSpace.COMFY.dp, vertical = FolioSpace.SNUG.dp))
+        Text(stringResource(R.string.open), color = FolioGlass.ink, fontSize = FolioType.FOOTNOTE.sp, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.clip(RoundedCornerShape(50)).background(FolioGlass.ink.copy(alpha = .18f)).padding(horizontal = FolioSpace.COMFY.dp, vertical = FolioSpace.SNUG.dp))
     }
 }
 
 @Composable
-private fun ResultRow(icon: ImageVector, title: String, subtitle: String?, trailing: (@Composable RowScope.() -> Unit)? = null, onClick: () -> Unit) {
+internal fun SpotlightResultRow(icon: ImageVector, title: String, subtitle: String?, trailing: (@Composable RowScope.() -> Unit)? = null, leading: (@Composable () -> Unit)? = null, subtitleLines: Int = 1, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick).padding(horizontal = FolioSpace.SMALL.dp, vertical = FolioSpace.COMPACT.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(34.dp).clip(RoundedCornerShape(9.dp)).background(Color.White.copy(alpha = .14f)), contentAlignment = Alignment.Center) {
-            Icon(icon, null, tint = Color.White, modifier = Modifier.size(20.dp))
+        if (leading != null) leading() else Box(Modifier.size(34.dp).clip(RoundedCornerShape(9.dp)).background(FolioGlass.ink.copy(alpha = .14f)), contentAlignment = Alignment.Center) {
+            Icon(icon, null, tint = FolioGlass.ink, modifier = Modifier.size(20.dp))
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, color = Color.White, fontSize = FolioType.SUBHEAD.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            subtitle?.let { Text(it, color = Color.White.copy(alpha = .6f), fontSize = FolioType.GROUP_LABEL.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            Text(title, color = FolioGlass.ink, fontSize = FolioType.SUBHEAD.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            subtitle?.let { Text(it, color = FolioGlass.ink.copy(alpha = .6f), fontSize = FolioType.GROUP_LABEL.sp, maxLines = subtitleLines, overflow = TextOverflow.Ellipsis) }
         }
         trailing?.let { Row(horizontalArrangement = Arrangement.spacedBy(FolioSpace.SMALL.dp), content = it) }
     }
@@ -418,9 +456,9 @@ private fun ResultRow(icon: ImageVector, title: String, subtitle: String?, trail
 
 @Composable
 private fun SpotlightRoundAction(icon: ImageVector, label: String, onClick: () -> Unit) {
-    Box(Modifier.size(36.dp).clip(CircleShape).background(Color.White.copy(alpha = .16f)).clickable(onClickLabel = label, onClick = onClick),
+    Box(Modifier.size(36.dp).clip(CircleShape).background(FolioGlass.ink.copy(alpha = .16f)).clickable(onClickLabel = label, onClick = onClick),
         contentAlignment = Alignment.Center) {
-        Icon(icon, label, tint = Color.White, modifier = Modifier.size(18.dp))
+        Icon(icon, label, tint = FolioGlass.ink, modifier = Modifier.size(18.dp))
     }
 }
 
@@ -429,27 +467,58 @@ private fun SpotlightRoundAction(icon: ImageVector, label: String, onClick: () -
 
 /**
  * Prefix beats word-start beats substring beats initials ("gm" → Google Maps). An app you renamed is still
- * found by the name Android gives it, after everything matching the name you chose.
+ * found by the names Android gives it in Korean and English, then by its package and pronunciation.
  */
 internal fun rankApps(apps: List<AppEntry>, query: String, frecency: Map<String, Double> = emptyMap()): List<AppEntry> {
     val boost: (AppEntry) -> Double = { frecency[it.id] ?: 0.0 }
     val hits = rankByLabel(apps, query, boost) { it.label }
     val matched = hits.mapTo(mutableSetOf(), AppEntry::id)
     val renamed = apps.filter { it.label != it.systemLabel && it.id !in matched }
-    return if (renamed.isEmpty()) hits else hits + rankByLabel(renamed, query, boost) { it.systemLabel }
+    val namedHits = hits + rankByLabel(renamed, query, boost) { it.systemLabel }
+    val namedIds = namedHits.mapTo(mutableSetOf(), AppEntry::id)
+    val alternateNames = apps.filter { it.id !in namedIds }.flatMap { app -> app.searchLabels.map { app to it } }
+    val alternateHits = rankByLabel(alternateNames, query, { boost(it.first) }) { it.second }
+        .map { it.first }.distinctBy(AppEntry::id)
+    val alternateIds = alternateHits.mapTo(mutableSetOf(), AppEntry::id)
+    val packageHits = rankByLabel(apps.filter { !it.isShortcut && it.id !in namedIds && it.id !in alternateIds }, query, boost) { it.packageName }
+    val directHits = namedHits + alternateHits + packageHits
+    val directIds = directHits.mapTo(mutableSetOf(), AppEntry::id)
+    val pronunciationHits = apps.filter { it.id !in directIds }.mapNotNull { app ->
+        val score = appSearchNames(app).mapNotNull { AppPronunciation.score(it, query) }.minOrNull()
+        score?.let { Triple(it, app, app.label.length) }
+    }.sortedWith(compareBy<Triple<Int, AppEntry, Int>>({ it.first }, { -boost(it.second) }, { it.third })).map { it.second }
+    return directHits + pronunciationHits
 }
+
+private fun appSearchNames(app: AppEntry): List<String> =
+    listOf(app.label, app.systemLabel) + app.searchLabels + listOfNotNull(app.packageName.takeUnless { app.isShortcut })
+
+/** The App Library and folder picker use the same names and normalization as Spotlight. */
+internal fun matchesAppQuery(app: AppEntry, query: String): Boolean {
+    val q = appSearchKey(query)
+    if (q.isEmpty()) return true
+    return appSearchNames(app).any { labelMatchScore(it, q) != null || AppPronunciation.score(it, query) != null }
+}
+
+/** Hangul syllables and IME jamo share a key; invisible formatting never splits a name. */
+private fun appSearchKey(value: String): String = java.text.Normalizer.normalize(
+    value.filter { Character.getType(it) != Character.FORMAT.toInt() }, java.text.Normalizer.Form.NFKD,
+).lowercase(java.util.Locale.ROOT).trim()
 
 /** Label ranking used by Spotlight; shorter labels win ties. Pure, so it's unit-tested. */
 internal fun <T> rankByLabel(items: List<T>, query: String, boost: (T) -> Double = { 0.0 }, label: (T) -> String): List<T> {
-    val q = query.lowercase()
+    val q = appSearchKey(query)
     return items.mapNotNull { item ->
-        val text = label(item).lowercase()
-        // A Chinese name also answers to its pinyin, joined ("weixin") and by initials ("wx"), like iOS.
-        val pinyin = Pinyin.syllables(text)
-        val score = listOfNotNull(labelScore(text, text.split(' ', '-', '.', '_').filter { it.isNotEmpty() }, q),
-            pinyin.takeIf { it.isNotEmpty() }?.let { labelScore(it.joinToString(""), it, q) }).minOrNull()
-        score?.let { Triple(it, item, label(item).length) }
+        labelMatchScore(label(item), q)?.let { Triple(it, item, label(item).length) }
     }.sortedWith(compareBy<Triple<Int, T, Int>>({ it.first }, { -boost(it.second) }, { it.third })).map { it.second }
+}
+
+private fun labelMatchScore(label: String, q: String): Int? {
+    val text = appSearchKey(label)
+    // A Chinese name also answers to its pinyin, joined ("weixin") and by initials ("wx"), like iOS.
+    val pinyin = Pinyin.syllables(text)
+    return listOfNotNull(labelScore(text, text.split(' ', '-', '.', '_').filter { it.isNotEmpty() }, q),
+        pinyin.takeIf { it.isNotEmpty() }?.let { labelScore(it.joinToString(""), it, q) }).minOrNull()
 }
 
 private fun labelScore(text: String, words: List<String>, q: String): Int? = when {
@@ -567,7 +636,8 @@ private fun settingShortcuts(context: android.content.Context) = listOf(
     SettingShortcut(context.getString(R.string.settings), Settings.ACTION_SETTINGS, listOf("settings", "preferences")),
 )
 
-private val SpotGlass = FolioGlass.card
+private val SpotGlass: Color
+    @Composable get() = FolioGlass.panel
 
 /** Whether the IME is actually on screen for [view]'s window. */
 private object WindowInsetsHolderIme {

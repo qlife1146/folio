@@ -40,15 +40,10 @@ class VersionCodeTest {
         assertTrue("0.6.7.1 should outrank 0.6.7", expected("0.6.7.1") > expected("0.6.7"))
         assertTrue("0.6.8 should outrank every fix of 0.6.7", expected("0.6.8") > expected("0.6.7.9"))
         assertEquals("nine slots per release", 9L, expected("0.6.7.9") - expected("0.6.7"))
-        // The name has to agree with the number, or a phone would be offered a build it then refuses to install.
-        assertTrue(SoftwareUpdate.isNewer("0.6.7.1", "0.6.7"))
-        assertTrue(SoftwareUpdate.isNewer("0.6.8", "0.6.7.9"))
-        assertTrue(SoftwareUpdate.isNewer("0.6.7.2", "0.6.7.1"))
     }
 
-    @Test fun `a pre-release shares its release's code, and the release still wins`() {
+    @Test fun `a pre-release shares its release's code`() {
         assertEquals(expected("0.6.7"), expected("0.6.7-beta.3"))
-        assertTrue("the stable has to read as newer than its own beta", SoftwareUpdate.isNewer("0.6.7", "0.6.7-beta.3"))
     }
 
     @Test fun `every code Folio has published is below this build's`() {

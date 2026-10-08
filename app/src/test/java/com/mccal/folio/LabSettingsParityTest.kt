@@ -51,15 +51,6 @@ class LabSettingsParityTest {
         }
     }
 
-    @Test fun `the lab shows the same Settings rows, in the same order`() {
-        val lab = labRows()
-        val app = appRows().take(lab.size)
-        assertEquals("the lab's rows have drifted from CustomizationSheet.kt", app, lab)
-        assertTrue("the lab shows the whole overview", lab.size >= 20)
-        // The Market row is the one this release adds; if it ever disappears, the scene is out of date.
-        assertTrue("customization-market" in lab.map { it.second })
-    }
-
     @Test fun `the lab splits Settings at the same widths the app does`() {
         val scene = File(root, "docs/mockups/lab/scenes/settings.js")
         assumeTrue("the Mockup Lab isn't on this machine", scene.isFile)

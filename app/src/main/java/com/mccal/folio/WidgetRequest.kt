@@ -25,6 +25,7 @@ internal class WidgetRequest(
     toToday: Boolean = false,
     packageName: String? = null,
     profileSerial: Long? = null,
+    todayReplaceId: Int? = null,
 ) {
     /** The placement slot the widget will take, and the Home cell it was asked for. */
     var slot by mutableIntStateOf(slot)
@@ -35,6 +36,7 @@ internal class WidgetRequest(
 
     /** Set while the picker is adding to the Today View. */
     var toToday by mutableStateOf(toToday)
+    var todayReplaceId by mutableStateOf(todayReplaceId)
 
     /** The app whose widgets are being shown, and which profile's copy of it; null lists everything. */
     var packageName by mutableStateOf(packageName)
@@ -48,12 +50,13 @@ internal class WidgetRequest(
 
     companion object {
         val Saver = listSaver<WidgetRequest, Any?>(
-            save = { listOf(it.slot, it.targetIndex, it.stackSlot, it.toToday, it.packageName, it.profileSerial) },
+            // The version suffix distinguishes this form from the legacy seven-element picker state.
+            save = { listOf(it.slot, it.targetIndex, it.stackSlot, it.toToday, it.packageName, it.profileSerial, it.todayReplaceId, 2) },
             restore = {
                 // Drop the old fixed-cell flag when restoring a picker saved by an earlier version.
                 val values = if (it.size == 7) it.filterIndexed { index, _ -> index != 2 } else it
                 WidgetRequest(values[0] as Int, values[1] as Int, values[2] as Int?, values[3] as Boolean,
-                    values[4] as String?, values[5] as Long?)
+                    values[4] as String?, values[5] as Long?, values.getOrNull(6) as? Int)
             },
         )
     }

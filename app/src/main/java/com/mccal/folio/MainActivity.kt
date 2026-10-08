@@ -22,7 +22,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.SystemBarStyle
-import androidx.activity.viewModels
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.res.stringResource
@@ -41,7 +40,7 @@ import android.content.Context
 import android.content.IntentFilter
 
 class MainActivity : ComponentActivity() {
-    private val model: LauncherModel by viewModels()
+    private val model: LauncherModel by lazy { (application as DuoApplication).launcherModel }
     private lateinit var widgets: WidgetController
     internal lateinit var backups: BackupController
         private set
@@ -59,10 +58,6 @@ class MainActivity : ComponentActivity() {
     private val settingsRequests = mutableIntStateOf(0)
     private val defaultHome = mutableStateOf(false)
     private val showFirstRun = mutableStateOf(false)
-    private val showWhatsNew = mutableStateOf(false)
-    private val whatsNewRequested = mutableStateOf(false)
-    /** A theme shared to Folio, waiting for Apply or Cancel. */
-    private val sharedTheme = mutableStateOf<FolioTheme?>(null)
     private lateinit var setupExperience: SetupExperience
     private lateinit var status: DeviceStatusMonitor
     private lateinit var appearance: AppearanceStore
@@ -80,24 +75,22 @@ class MainActivity : ComponentActivity() {
         if (granted) requestAppearanceLocation(keepPending = true)
         else finishAppearanceLocation(getString(R.string.location_permission_wasn_t_granted_using))
     })
+    private val phonePermission = activityResultRegistry.register("duo.phone.state", this,
+        ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted && ::status.isInitialized) status.refreshPhoneAccess()
+    }
     private var openingDiscover = false
     private var shadeSetupDialog: android.app.AlertDialog? = null
     private var returningFromShadeSettings = false
     private var shadeSetupOwnsExternalUi = false
     private var recreatingShadeSetup = false
-    /**
-     * Whether this phone sees Clear Badges When Opened ([FeatureGate.BADGES_WHEN_OPENED]). Read once in `onCreate`,
-     * since asking the gate reads preferences and a redeemed supporter code restarts Folio anyway (CMP-9).
-     */
-    private var badgesGateOpen = false
-
     override fun onCreate(savedInstanceState: Bundle?) {
         // The wallpaper theme must be chosen before the window exists (switching to it starts the screen again).
         if (usesSystemWallpaper(this)) setTheme(R.style.Theme_Duo_Wallpaper)
         super.onCreate(savedInstanceState)
+        AppSecurity.initialize(this)
         setupExperience = SetupExperience(this)
         Installs.start(this); NewApps.load(this)
-        badgesGateOpen = FeatureGate.BADGES_WHEN_OPENED.isOpen(this)
         FocusScheduler.run(this)
         // USER_PRESENT is a protected system broadcast delivered to runtime receivers.
         androidx.core.content.ContextCompat.registerReceiver(this, unlockReceiver, android.content.IntentFilter(Intent.ACTION_USER_PRESENT),
@@ -107,7 +100,6 @@ class MainActivity : ComponentActivity() {
             IntentFilter("android.intent.action.CLOSE_SYSTEM_DIALOGS"), ContextCompat.RECEIVER_NOT_EXPORTED)
         showFirstRun.value = setupExperience.entryDecision(SetupExperience.hadLauncherState(this)) ==
             SetupEntryDecision.SHOW
-        showWhatsNew.value = savedInstanceState == null && WhatsNew.shouldShow(this, firstRun = showFirstRun.value)
         returningFromShadeSettings = savedInstanceState?.getBoolean(SHADE_SETTINGS_PENDING) == true
         val restoreShadeDialog = savedInstanceState?.getBoolean(SHADE_DIALOG_VISIBLE) == true
         appearance = AppearanceStore(this)
@@ -126,17 +118,14 @@ class MainActivity : ComponentActivity() {
         lifecycle.addObserver(IslandEvents.Observer(this))
         updateDefaultHome()
         if (savedInstanceState == null && intent.getStringExtra("duo_destination") == "search") searchRequests.intValue++
-        if (savedInstanceState == null && opensSettings(intent)) { SoftwareUpdate.openRequested = intent.getBooleanExtra(SoftwareUpdate.EXTRA_OPEN_UPDATE, false); settingsRequests.intValue++ }
-        if (savedInstanceState == null && takeMarketLink(intent)) settingsRequests.intValue++
+        if (savedInstanceState == null && opensSettings(intent)) settingsRequests.intValue++
         intent.removeExtra("duo_destination")
-        // A recreated activity (rotation, fold, process restart) keeps the pending alert; the launch intent is used once.
-        if (savedInstanceState == null) takeSharedTheme(intent)
-        else sharedTheme.value = savedInstanceState.getString(PENDING_THEME)?.let(FolioTheme::fromJson)
         setContent {
             val savedState = model.state.collectAsStateWithLifecycle().value
             val safeMode = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(SafeMode.active) }
             val solidGlass = savedState.reduceTransparency || rememberSystemHighContrast()
             val state = FocusPages.effective(if (safeMode.value) SafeMode.effective(savedState) else savedState)
+                .withCommonMaterial()
                 .let { if (solidGlass) it.withSolidGlass() else it }
             androidx.compose.runtime.LaunchedEffect(Unit) { kotlinx.coroutines.delay(31_000); SafeMode.markStable(this@MainActivity) }
             val safeAcknowledged = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
@@ -171,18 +160,14 @@ class MainActivity : ComponentActivity() {
                     unreported.value?.let { Diagnostics.markAsked(this@MainActivity, it) }; unreported.value = null
                 }) { androidx.compose.material3.Text(stringResource(R.string.not_now)) } })
             val deviceStatus = ScreenshotMode.status(status.state.collectAsStateWithLifecycle().value, ScreenshotMode.on.collectAsStateWithLifecycle().value)
-            // Folio shows its own status in the rail, so hide Android's status bar on Home (it
-            // stays in apps, and a swipe from the very top edge reveals it briefly).
-            androidx.compose.runtime.LaunchedEffect(state.verticalStatus) {
-                androidx.core.view.WindowCompat.getInsetsController(window, window.decorView).apply {
-                    systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                    if (state.verticalStatus) hide(androidx.core.view.WindowInsetsCompat.Type.statusBars())
-                    else show(androidx.core.view.WindowInsetsCompat.Type.statusBars())
-                }
+            val dragHost = androidx.compose.runtime.remember { HomeDragHost() }
+            androidx.compose.runtime.LaunchedEffect(state.showSystemStatusBar) {
+                setStatusMode(!state.showSystemStatusBar)
             }
-            val overlayOpen = topPanel.value != null || spotlightVisible.value || LauncherSheetsOpen.intValue > 0 ||
+            val activityOverlayOpen = topPanel.value != null || spotlightVisible.value ||
                 // Only a Lock Cover that's actually drawn blurs Home (turning the setting off mid-way must not leave a blur).
                 (lockCoverVisible.value && state.lockCover)
+            val overlayOpen = activityOverlayOpen || homeDismissal.hasOpenPopup
             MotionSpeed.current = state.motionSpeed
             // The trail for bug reports: what was open, and a heartbeat while Home is showing.
             val overlayName = listOfNotNull(topPanel.value?.name, getString(R.string.spotlight).takeIf { spotlightVisible.value },
@@ -196,7 +181,10 @@ class MainActivity : ComponentActivity() {
                     while (true) { kotlinx.coroutines.delay(30_000); Diagnostics.checkpoint(this@MainActivity, visible = true) }
                 }
             }
-            val overlayProgress by rememberSettlingProgress(if (overlayOpen) 1f else 0f,
+            val blurOverlayOpen = topPanel.value != null || spotlightVisible.value ||
+                LauncherSheetsOpen.intValue > LauncherContextMenusOpen.intValue ||
+                (lockCoverVisible.value && state.lockCover)
+            val overlayProgress by rememberSettlingProgress(if (blurOverlayOpen) 1f else 0f,
                 MotionSpeed.spring(.86f, androidx.compose.animation.core.Spring.StiffnessMediumLow))
             val backdropBlurPx = with(androidx.compose.ui.platform.LocalDensity.current) { (state.panelBlur * 32).dp.toPx() }
             val backdropBlur = androidx.compose.runtime.remember(backdropBlurPx) {
@@ -217,6 +205,8 @@ class MainActivity : ComponentActivity() {
                 onDispose { if (typing) LiveDiscover.setExternalResultPending(this@MainActivity, "main", "keyboard", false) }
             }
             val clearedBadges = BadgeClears.cleared.collectAsStateWithLifecycle().value
+            val securityRevision = AppSecurity.revision.collectAsStateWithLifecycle().value
+            val badgeRevision = IslandListenerService.badgeRevision.collectAsStateWithLifecycle().value
             // Recent-app dots (Beta): refreshed every minute while Home is showing.
             val recentPackages by androidx.compose.runtime.produceState(emptySet<String>(), state.dockRecentDots) {
                 if (!state.dockRecentDots) { value = emptySet(); return@produceState }
@@ -232,12 +222,17 @@ class MainActivity : ComponentActivity() {
                     iconsMostlyDark(state.apps.filter { LiveIcons.kind(this@MainActivity, it.packageName) == null && it.shortcutId == null }.map { it.icon })
                 }
             }
-            val postedBadges = androidx.compose.runtime.remember(notificationItems, clearedBadges) { BadgeClears.counts(notificationItems, clearedBadges) }
+            val postedBadges = androidx.compose.runtime.remember(badgeRevision, securityRevision, clearedBadges) {
+                IslandListenerService.badgeCounts(clearedBadges)
+            }
             // Clear Badges When Opened: the counts already seen are hidden, and a seen count follows its app down when
             // notifications go away elsewhere. Nothing of this runs while the switch is off or the gate is shut.
-            val clearsBadgesWhenOpened = clearsBadgesWhenOpened(state.badgesWhenOpened)
+            val clearsBadgesWhenOpened = state.badgesWhenOpened
             val seenBadges = if (clearsBadgesWhenOpened) state.badgesSeen else emptyMap()
             val badgeCounts = androidx.compose.runtime.remember(postedBadges, seenBadges) { BadgesWhenOpened.visible(postedBadges, seenBadges) }
+            val profileBadgeCounts = androidx.compose.runtime.remember(badgeRevision, securityRevision, clearedBadges, badgeCounts) {
+                IslandListenerService.profileBadgeCounts(clearedBadges).filterKeys { it.packageName in badgeCounts }
+            }
             if (clearsBadgesWhenOpened) androidx.compose.runtime.LaunchedEffect(postedBadges) { model.trimBadgesSeen(postedBadges) }
             androidx.compose.runtime.SideEffect { latestNotifications = notificationItems }
             val wallpaperTone = rememberWallpaperTone(state.systemWallpaper)
@@ -246,9 +241,13 @@ class MainActivity : ComponentActivity() {
             androidx.lifecycle.compose.LifecycleResumeEffect(Unit) { reduceMotionState.value = reduceMotionEnabled(this@MainActivity); onPauseOrDispose { } }
             val reduceMotion = reduceMotionState.value
             val iconTint = if (state.iconTintFromWallpaper) wallpaperTone.primary?.let(::vividTint)?.toLong()?.and(0xFFFFFFFFL) ?: state.iconTint else state.iconTint
+            val materialBackdrop = rememberMaterialBackdrop()
             androidx.compose.runtime.CompositionLocalProvider(
+                LocalSystemStatusBarVisible provides state.showSystemStatusBar,
                 LocalWallpaperTone provides wallpaperTone,
                 LocalGlassLook provides GlassLook(state.widgetGlass, state.glassOutline),
+                LocalBackgroundMaterial provides state.backgroundMaterial,
+                LocalMaterialBackdrop provides materialBackdrop,
                 LocalSolidGlass provides solidGlass,
                 LocalFolderLook provides FolderLook(state.folderColumns, state.folderBackground, state.folderBackdropOpacity),
                 LocalLabelSize provides state.labelSize,
@@ -272,18 +271,17 @@ class MainActivity : ComponentActivity() {
                 LocalFocusLock provides FocusPages.lockingFocus(savedState)?.let { FocusLock(it, savedState.layout.pageCount) },
                 LocalIconsAreDark provides iconsAreDark,
                 LocalRecentPackages provides recentPackages,
-                LocalBadgeCounts provides badgeCounts, LocalInstallProgress provides installProgress, LocalNewApps provides newApps, LocalFolderColors provides state.folderColors) { FoldTransitionHost(state.foldEffect && !reduceMotion, state.foldIntensity, state.stayAwakeOnFold, state.foldSnapshot, state.haptics) {
-                // The launcher blurs behind every overlay with the same spring the overlay uses.
-                androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()
-                    .graphicsLayer {
-                    val p = overlayProgress
-                    // Fixed radius while any overlay is showing: a constant blur is cached by the RenderThread,
-                    // whereas animating the radius re-blurred the whole Home every frame (~14ms of GPU per
-                    // frame). The overlay's scrim fades in over it, which hides the switch.
-                    renderEffect = if (p > .02f && backdropBlurPx >= 2f && LauncherPagesOpen.intValue == 0 && SettingsPeek.value == null) backdropBlur else null
+                LocalBadgeCounts provides badgeCounts, LocalProfileBadgeCounts provides profileBadgeCounts,
+                LocalInstallProgress provides installProgress, LocalNewApps provides newApps, LocalFolderColors provides state.folderColors) {
+                androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize().homeDragInput(dragHost.drag) {
+                    dragHost.input?.let { it.copy(enabled = it.enabled && topPanel.value == null &&
+                        !(lockCoverVisible.value && state.lockCover)) }
                 }) {
-                LauncherScreen(state, model, widgets, homeRequests.intValue,
-                    onLaunch = { launchApp(it) }, onMakeDefault = ::makeDefault, onAppInfo = ::appInfo,
+                FoldTransitionHost(state.foldEffect && !reduceMotion, state.foldIntensity, state.stayAwakeOnFold, state.foldSnapshot, state.haptics) {
+                // Home's own background layer handles blur; its foreground popups remain sharp.
+                androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {
+                LauncherScreen(state, model, widgets, homeRequests.intValue, dragHost,
+                    onLaunch = { launchApp(it) }, onMakeDefault = ::makeDefault, onAppInfo = ::appInfo, onUninstall = ::uninstallApp,
                     isDefaultHome = defaultHome.value, deviceStatus = deviceStatus, onStatusMode = ::setStatusMode, onWallpaperPreview = ::previewWallpaper,
                     onDiscover = ::openDiscover, searchRequests = searchRequests.intValue, settingsRequests = settingsRequests.intValue,
                     onLaunchFrom = ::launchApp, onGoogleSearch = ::openGoogleSearch,
@@ -295,36 +293,31 @@ class MainActivity : ComponentActivity() {
                     onAppearanceClear = { cancelAppearanceLocation(); appearance.clearLocation(systemDark()) },
                     showFirstRun = showFirstRun.value,
                     onFinishFirstRun = ::finishFirstRun,
-                    onShadeSetup = ::showShadeSetup, onShowWelcome = { showFirstRun.value = true }, onShowWhatsNew = { whatsNewRequested.value = true })
+                    onShadeSetup = ::showShadeSetup, onShowWelcome = { showFirstRun.value = true },
+                    popupBackdropOpen = activityOverlayOpen, spotlightProgress = { overlayProgress })
                 }
-                StandByOverlay(rememberHalfOpenPose(this@MainActivity), state.standBy, blocked = overlayOpen, status = deviceStatus)
                 LockCover(lockCoverVisible.value && state.lockCover) { lockCoverVisible.value = false }
-                AudioDeviceCard("BLUETOOTH" !in state.islandEventsOff, blocked = overlayOpen)
                 SetupReminderCard(defaultHome.value, blocked = overlayOpen || showFirstRun.value || !defaultHome.value, onMakeDefault = ::makeDefault,
                     onShadeSetup = ::showShadeSetup) { SettingsLink.page = CustomizationPage.PERMISSIONS; settingsRequests.intValue++ }
-                sharedTheme.value?.let { theme ->
-                    AlertDialog(onDismissRequest = { sharedTheme.value = null },
-                        title = { androidx.compose.material3.Text(stringResource(R.string.apply_1, theme.name)) },
-                        text = { androidx.compose.material3.Text(stringResource(R.string.this_changes_icons_badges_glass_text_on)) },
-                        confirmButton = { androidx.compose.material3.TextButton(onClick = { model.applyTheme(theme); sharedTheme.value = null }) {
-                            androidx.compose.material3.Text(getString(R.string.apply)) } },
-                        dismissButton = { androidx.compose.material3.TextButton(onClick = { sharedTheme.value = null }) {
-                            androidx.compose.material3.Text(getString(R.string.cancel)) } })
-                }
-                if (showWhatsNew.value || whatsNewRequested.value) WhatsNewSheet { showWhatsNew.value = false; whatsNewRequested.value = false; WhatsNew.markSeen(this@MainActivity) }
-                // With live activities in the side rail, the camera island on Home keeps only its brief events.
-                if (state.island && (!spotlightVisible.value || state.islandInSpotlight)) CutoutIsland(IslandListenerService.activity.collectAsStateWithLifecycle().value
-                    ?.takeUnless { it is IslandActivity.Call && "CALL" in state.islandEventsOff }
-                    ?.takeUnless { state.railActivities && state.verticalStatus && !overlayOpen }, state.islandEventsOff + "BLUETOOTH") {
-                    IslandListenerService.open(this@MainActivity, it)
-                }
+                PopupBackdropContent {
                 TopPanels(topPanel.value, { overlayProgress }, deviceStatus, onClose = { topPanel.value = null },
                     onSystemPanel = { openAndroidShade(it) }, showClock = state.notificationClock, grouped = state.groupNotifications,
                     ccControls = state.ccControls, onCcControls = model::setCcControls,
                     ccSize = state.ccSize, ccCentered = state.ccCentered, ncSplit = state.ncSplit,
                     focusModes = state.focusModes, activeFocus = state.activeFocus, onFocus = model::setFocus)
+                }
+                PopupBackdropContent {
                 SpotlightOverlay(spotlightVisible.value, { overlayProgress }, state, onClose = { spotlightVisible.value = false },
-                    onLaunch = { launchApp(it) })
+                    onLaunch = { launchApp(it) }, fromBottom = spotlightFromBottom.value, drag = dragHost.drag,
+                    onAppMenu = { dragHost.onAppMenu(it) },
+                    dismissImmediately = LauncherContextMenusOpen.intValue > 0 || dragHost.drag.source?.scope == SPOTLIGHT_DRAG_SCOPE,
+                    backgroundBlur = backdropBlur.takeIf { dragHost.spotlightMenuOpen && backdropBlurPx >= 2f })
+                }
+                if (dragHost.spotlightMenuOpen) dragHost.spotlightMenuContent?.invoke()
+                }
+                // StandBy must remain sharp and visible while the Home fold shader/snapshot is active.
+                StandByOverlay(this@MainActivity, state.standBy,
+                    blocked = overlayOpen || showFirstRun.value, status = deviceStatus)
                 // Last, so the corners sit above everything in Home's window.
                 if (state.roundedCorners) RoundedScreenCorners(state.cornerRadius.dp)
             } } }
@@ -336,8 +329,19 @@ class MainActivity : ComponentActivity() {
         if (restoreShadeDialog) window.decorView.post { if (!isFinishing && !isDestroyed) showShadeSetup() }
     }
 
+    private fun requestPhonePermission() {
+        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) ||
+            ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) return
+        // Permission grants belong to this installation, so this prompt history is not part of layout backups.
+        val permissions = getSharedPreferences("runtime_permissions", MODE_PRIVATE)
+        if (permissions.getBoolean("phone_state_requested", false)) return
+        permissions.edit().putBoolean("phone_state_requested", true).apply()
+        runCatching { phonePermission.launch(android.Manifest.permission.READ_PHONE_STATE) }
+            .onFailure { permissions.edit().remove("phone_state_requested").apply() }
+    }
+
     override fun onStart() {
-        super.onStart(); widgets.host.startListening()
+        super.onStart(); widgets.startListening()
         if (!timeReceiverRegistered) {
             ContextCompat.registerReceiver(this, timeReceiver, IntentFilter().apply {
                 addAction(Intent.ACTION_TIME_TICK); addAction(Intent.ACTION_TIME_CHANGED)
@@ -348,6 +352,7 @@ class MainActivity : ComponentActivity() {
         appearance.refresh(systemDark())
     }
     override fun onStop() {
+        AppSecurity.closeFolder()
         closeOverlays() // never come back to a blurred Home
         if (timeReceiverRegistered) { unregisterReceiver(timeReceiver); timeReceiverRegistered = false }
         widgets.host.stopListening(); super.onStop()
@@ -369,8 +374,7 @@ class MainActivity : ComponentActivity() {
     }
     override fun onResume() {
         super.onResume()
-        SoftwareUpdate.afterUpdate(this)
-        SoftwareUpdate.startCheckIfDue(this)
+        requestPhonePermission()
         FolioForeground.visible.value = true
         Diagnostics.event("Home shown (${Diagnostics.screenSummary(this).substringBefore(',')})")
         Diagnostics.checkpoint(this, visible = true)
@@ -401,6 +405,7 @@ class MainActivity : ComponentActivity() {
     /** The notifications on screen now, for Clear Badge. */
     internal var latestNotifications: List<NotificationItem> = emptyList()
     internal val spotlightVisible = androidx.compose.runtime.mutableStateOf(false)
+    private val spotlightFromBottom = androidx.compose.runtime.mutableStateOf(false)
     /** Lock Cover: shown when the phone is unlocked straight to Home. */
     private val lockCoverVisible = androidx.compose.runtime.mutableStateOf(false)
     private var unlockedAt = 0L
@@ -414,7 +419,11 @@ class MainActivity : ComponentActivity() {
     /** Opens Spotlight, Notification Center or Control Center (Folio's own panels when enabled). */
     internal fun showPanel(panel: ShadePanel) { if (panel == ShadePanel.SEARCH) openSpotlight() else openSystemShade(panel) }
 
-    internal fun openSpotlight() { topPanel.value = null; spotlightVisible.value = true }
+    internal fun openSpotlight(fromBottom: Boolean = false) {
+        topPanel.value = null
+        if (!spotlightVisible.value) spotlightFromBottom.value = fromBottom
+        spotlightVisible.value = true
+    }
     private fun closeOverlays() { topPanel.value = null; spotlightVisible.value = false }
 
     /**
@@ -426,10 +435,10 @@ class MainActivity : ComponentActivity() {
         shadeSetupDialog?.dismiss()
         closeOverlays()
         showFirstRun.value = false; lockCoverVisible.value = false
-        showWhatsNew.value = false; whatsNewRequested.value = false; sharedTheme.value = null
     }
 
     private fun returnHome() {
+        AppSecurity.lock()
         closeEverything()
         homeRequests.intValue++
     }
@@ -499,53 +508,29 @@ class MainActivity : ComponentActivity() {
     }
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) setStatusMode(model.state.value.verticalStatus)
+        if (hasFocus) setStatusMode(!model.state.value.showSystemStatusBar)
     }
     override fun onSaveInstanceState(outState: Bundle) {
         widgets.save(outState)
         outState.putBoolean(SHADE_DIALOG_VISIBLE, shadeSetupDialog?.isShowing == true && !returningFromShadeSettings)
         outState.putBoolean(SHADE_SETTINGS_PENDING, returningFromShadeSettings)
-        sharedTheme.value?.let { outState.putString(PENDING_THEME, it.toJson().toString()) }
         super.onSaveInstanceState(outState)
     }
     /** Android's "Home app settings" gear, or Folio's own app icon (the FolioSettingsApp alias). Until Folio is the
      * Home app, its icon opens Home instead, as a preview you can leave with Back or the Home gesture. */
-    /**
-     * A `folio://package/…` or `folio://source/…` link someone shared. Folio remembers what to open and asks for the
-     * Market; a link it doesn't understand is ignored rather than guessed at.
-     */
-    private fun takeMarketLink(intent: Intent): Boolean {
-        if (intent.action != Intent.ACTION_VIEW) return false
-        val link = MarketLink.parse(intent.data?.toString()) ?: return false
-        intent.data = null
-        // A supporter's code arrives as folio://redeem, which RedeemActivity handles and Settings answers.
-        if (!MarketAccess.isOpen(this)) return false
-        MarketLink.pending = link
-        return true
-    }
-
     private fun opensSettings(intent: Intent) = intent.action == Intent.ACTION_APPLICATION_PREFERENCES ||
         (fromAppIcon(intent) && defaultHome.value)
     private fun fromAppIcon(intent: Intent) = intent.component?.className?.startsWith("$FOLIO_CLASSES.${AppIconChoice.ALIAS_PREFIX}") == true
-
-    /** Any app can start Home with this extra, so it's parsed again and only ever applied after the user taps Apply. */
-    private fun takeSharedTheme(intent: Intent?) {
-        val raw = intent?.getStringExtra(ThemeImportActivity.EXTRA_THEME) ?: return
-        intent.removeExtra(ThemeImportActivity.EXTRA_THEME)
-        sharedTheme.value = raw.takeIf { it.length <= ThemeImportActivity.MAX_BYTES }?.let(FolioTheme::fromJson)
-    }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
 
         setIntent(intent)
-        takeSharedTheme(intent)
         FoldRenderExperiment.onNewIntent(this, intent)
         updateDefaultHome()
         if (intent.getStringExtra("duo_destination") == "search") searchRequests.intValue++
         // One chain: tapping Folio's icon opens Settings *or* goes Home, never both.
-        if (opensSettings(intent)) { SoftwareUpdate.openRequested = intent.getBooleanExtra(SoftwareUpdate.EXTRA_OPEN_UPDATE, false); settingsRequests.intValue++ }
-        else if (takeMarketLink(intent)) settingsRequests.intValue++
+        if (opensSettings(intent)) settingsRequests.intValue++
         else if (intent.hasCategory(Intent.CATEGORY_HOME) || fromAppIcon(intent) || intent.getStringExtra("duo_destination") == "home") {
             returnHome()
         }
@@ -554,22 +539,23 @@ class MainActivity : ComponentActivity() {
 
     @Deprecated("Widget configuration uses the platform host request-code API")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        if (!widgets.onActivityResult(requestCode, resultCode)) super.onActivityResult(requestCode, resultCode, data)
+        if (!widgets.onActivityResult(requestCode, resultCode)) {
+            // AppWidgetHost returns cross-profile configuration here; forward other results to AndroidX.
+            @Suppress("DEPRECATION")
+            super.onActivityResult(requestCode, resultCode, data)
+        }
     }
-
-    /**
-     * Whether Clear Badges When Opened is doing anything here: the switch on, and the gate open for this phone. Asked
-     * at both entry points, so a phone the gate is shut for hides no badge and remembers no counts (REL-4a).
-     */
-    private fun clearsBadgesWhenOpened(switchOn: Boolean): Boolean = switchOn && badgesGateOpen
 
     /** The badge showing on [packageName] now counts as seen, so it goes away until a new notification arrives. */
     private fun noteBadgeSeen(packageName: String) {
-        if (!clearsBadgesWhenOpened(model.state.value.badgesWhenOpened)) return
-        model.noteBadgeSeen(packageName, BadgeClears.counts(latestNotifications, BadgeClears.cleared.value)[packageName] ?: 0)
+        if (!model.state.value.badgesWhenOpened) return
+        model.noteBadgeSeen(packageName, IslandListenerService.badgeCounts(BadgeClears.cleared.value)[packageName] ?: 0)
     }
 
-    private fun launchApp(app: AppEntry, bounds: android.graphics.Rect? = null) {
+    private fun launchApp(app: AppEntry, bounds: android.graphics.Rect? = null) =
+        AppSecurity.run(this, app.packageName, app.user) { launchAuthenticatedApp(app, bounds) }
+
+    private fun launchAuthenticatedApp(app: AppEntry, bounds: android.graphics.Rect?) {
         RecentApps.record(this, app.id)
         NewApps.opened(this, app.packageName)
         noteBadgeSeen(app.packageName)
@@ -580,7 +566,12 @@ class MainActivity : ComponentActivity() {
             val shortcut = app.shortcutId
             if (shortcut != null) launcherApps.startShortcut(app.packageName, shortcut, screenBounds(bounds), launchOptions(bounds), user)
             else launcherApps.startMainActivity(app.component, user, screenBounds(bounds), launchOptions(bounds))
-        } catch (_: Exception) { IslandEvents.notice(this, getString(R.string.app_is_unavailable, app.label), app.icon); model.refresh() }
+        } catch (_: Exception) {
+            val hidden = AppSecurity.isHidden(app)
+            IslandEvents.notice(this, getString(R.string.app_is_unavailable, if (hidden) getString(R.string.security_hidden) else app.label),
+                app.icon.takeUnless { hidden })
+            model.refresh()
+        }
     }
 
     private fun screenBounds(bounds: android.graphics.Rect?): android.graphics.Rect? = bounds?.takeUnless { it.isEmpty }?.let {
@@ -591,12 +582,13 @@ class MainActivity : ComponentActivity() {
         android.app.ActivityOptions.makeScaleUpAnimation(window.decorView, it.left, it.top, it.width(), it.height()).toBundle()
     }
     private fun openGoogleSearch(bounds: android.graphics.Rect?): Boolean = try {
-        startActivity(googleSearchIntent().apply { sourceBounds = screenBounds(bounds) }, launchOptions(bounds))
+        AppSecurity.startActivity(this, googleSearchIntent().apply { sourceBounds = screenBounds(bounds) }, launchOptions(bounds))
         true
     } catch (_: android.content.ActivityNotFoundException) { false }
       catch (_: SecurityException) { false }
 
     private fun openDiscover() {
+        if (AppSecurity.isProtected(DiscoverClient.GOOGLE_PACKAGE)) return
         if (DiscoverEmbedding.supported(this)) {
             if (openingDiscover) return
             openingDiscover = true
@@ -622,7 +614,7 @@ class MainActivity : ComponentActivity() {
             .setNegativeButton(getString(R.string.stay_on_home), null)
             .apply {
                 if (google != null) setPositiveButton(getString(R.string.open_google)) { _, _ ->
-                    runCatching { startActivity(google) }
+                    runCatching { AppSecurity.startActivity(this@MainActivity, google) }
                 }
             }
             .show()
@@ -723,14 +715,12 @@ class MainActivity : ComponentActivity() {
         if (windowChangedShape(was, size)) topPanel.value = null
         // Folding, Display size, Smallest width or split screen can bring Android's status bar back over the Side Bar
         // status; hide it again once the new layout is in place.
-        window.decorView.post { setStatusMode(model.state.value.verticalStatus) }
+        window.decorView.post { setStatusMode(!model.state.value.showSystemStatusBar) }
     }
 
-    private fun setStatusMode(vertical: Boolean) {
-        LiveDiscover.host.get()?.statusMode(vertical)
-        val controller = WindowCompat.getInsetsController(window, window.decorView)
-        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        if (vertical) controller.hide(WindowInsetsCompat.Type.statusBars()) else controller.show(WindowInsetsCompat.Type.statusBars())
+    private fun setStatusMode(hidden: Boolean) {
+        LiveDiscover.host.get()?.statusMode(hidden)
+        window.setSystemStatusBarVisible(!hidden)
     }
 
     private fun previewWallpaper() {
@@ -753,9 +743,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun uninstallApp(app: AppEntry) {
+        try {
+            val user = getSystemService(UserManager::class.java).getUserForSerialNumber(app.userSerial)
+                ?: throw IllegalStateException(getString(R.string.profile_is_unavailable))
+            startActivity(Intent(Intent.ACTION_DELETE, android.net.Uri.fromParts("package", app.packageName, null))
+                .putExtra(Intent.EXTRA_USER, user))
+        } catch (_: Exception) {
+            IslandEvents.notice(this, getString(R.string.app_uninstall_unavailable, app.label), app.icon)
+            model.refresh()
+        }
+    }
+
     private companion object {
         const val SHADE_DIALOG_VISIBLE = "duo.shade.dialog_visible"
         const val SHADE_SETTINGS_PENDING = "duo.shade.settings_pending"
-        const val PENDING_THEME = "folio.theme.pending"
     }
 }

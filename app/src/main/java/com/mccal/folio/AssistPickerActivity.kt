@@ -61,8 +61,10 @@ class AssistPickerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppSecurity.initialize(this)
         searchOnlyState.value = intent.getBooleanExtra(EXTRA_SEARCH_ONLY, false)
         val targets = AssistTarget.entries.mapNotNull { target ->
+            if (AppSecurity.isHidden(target.packageName, android.os.Process.myUserHandle())) return@mapNotNull null
             val launch = packageManager.getLaunchIntentForPackage(target.packageName) ?: return@mapNotNull null
             val icon = runCatching { packageManager.getApplicationIcon(target.packageName).toBitmap(144, 144) }.getOrNull()
             Triple(target, launch, icon)
@@ -101,7 +103,7 @@ class AssistPickerActivity : ComponentActivity() {
                                     textStyle = TextStyle(color = Color.White, fontSize = FolioType.BODY.sp), cursorBrush = SolidColor(Color.White),
                                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                                     keyboardActions = KeyboardActions(onSearch = {
-                                        if (query.isNotBlank()) { openWebSearch(this@AssistPickerActivity, WebSearchTarget.GOOGLE, query); finish() }
+                                        if (query.isNotBlank()) openWebSearch(this@AssistPickerActivity, WebSearchTarget.GOOGLE, query, ::finish)
                                     }))
                             }
                         }
@@ -112,7 +114,7 @@ class AssistPickerActivity : ComponentActivity() {
                                 finish()
                             }
                             PickerPill(stringResource(R.string.duckduckgo), Modifier.weight(1f)) {
-                                if (query.isNotBlank()) { openWebSearch(this@AssistPickerActivity, WebSearchTarget.DUCKDUCKGO, query); finish() }
+                                if (query.isNotBlank()) openWebSearch(this@AssistPickerActivity, WebSearchTarget.DUCKDUCKGO, query, ::finish)
                                 else focus.requestFocus()
                             }
                         }
@@ -126,8 +128,7 @@ class AssistPickerActivity : ComponentActivity() {
     override fun onStop() { super.onStop(); if (!isChangingConfigurations) finish() }
 
     private fun start(intent: Intent) {
-        runCatching { startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-        finish()
+        runCatching { AppSecurity.startActivity(this, intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), onStarted = ::finish) }
     }
 
     companion object {

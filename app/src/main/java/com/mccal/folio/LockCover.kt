@@ -131,7 +131,7 @@ internal fun LockCover(visible: Boolean, onDismiss: () -> Unit) {
         }
         val flashlight: @Composable () -> Unit = { CoverButton(Icons.Rounded.FlashlightOn, "Flashlight") { FolioActions.run(context, FolioAction.TORCH) } }
         val camera: @Composable () -> Unit = { CoverButton(Icons.Rounded.PhotoCamera, "Camera") {
-            onDismiss(); runCatching { context.startActivity(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            onDismiss(); runCatching { AppSecurity.startActivity(context, Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
         } }
         // Flashlight and camera: bottom corners as on iPhone, or stacked on the side edge when wide, as on iPhone Duo.
         if (wide) Column(Modifier.align(Alignment.BottomEnd).padding(end = FolioSpace.XL.dp, bottom = FolioSpace.HUGE.dp), verticalArrangement = Arrangement.spacedBy(FolioSpace.COMFY.dp)) {

@@ -24,8 +24,11 @@ internal fun LayoutRestorePreview(preview: LayoutImportPreview, onRestore: () ->
                 if (preview.layout.leadingSlots.any { it != null } || preview.layout.widgetPlacements.any { it.page == -1 })
                     Text(stringResource(R.string.includes_your_unfolded_only_page), style = MaterialTheme.typography.bodySmall)
                 Text(stringResource(R.string.this_also_restores_icon_layout_labels_se))
-                Text(stringResource(R.string.your_selected_launcher_background_photo),
+                if (preview.settings != null) Text(stringResource(R.string.backup_restores_app_settings))
+                if (preview.preferenceSettings != null) Text(stringResource(R.string.backup_restores_saved_preferences))
+                if (preview.preferenceSettings == null) Text(stringResource(R.string.your_selected_launcher_background_photo),
                     style = MaterialTheme.typography.bodySmall)
+                Text(stringResource(R.string.backup_permissions_and_widgets), style = MaterialTheme.typography.bodySmall)
                 if (preview.missingApps.isNotEmpty()) {
                     Text(stringResource(R.string.unavailable_apps_1, preview.missingApps.size), style = MaterialTheme.typography.titleSmall,
                         color = MaterialTheme.colorScheme.error)
@@ -41,8 +44,6 @@ internal fun LayoutRestorePreview(preview: LayoutImportPreview, onRestore: () ->
                 }
                 val reconnect = preview.layout.widgetPlacements.count { it.id == NEEDS_BINDING_WIDGET }
                 if (reconnect > 0) Text(pluralStringResource(R.plurals.widgets_keep_their_saved_space, reconnect, reconnect))
-                if (preview.packageCount > 0)
-                    Text(pluralStringResource(R.plurals.packages_replace_what_this_phone_has, preview.packageCount, preview.packageCount))
                 Text(stringResource(R.string.nothing_changes_until_you_choose_restore), style = MaterialTheme.typography.bodySmall)
             }
         }, confirmButton = { TextButton(onClick = onRestore, modifier = Modifier.testTag("layout-restore-apply")) { Text(stringResource(R.string.restore)) } },

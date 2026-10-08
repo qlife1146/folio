@@ -21,7 +21,6 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.viewModels
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
@@ -63,6 +62,9 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
 import androidx.window.WindowSdkExtensions
 import androidx.window.embedding.*
 import kotlinx.coroutines.launch
@@ -70,14 +72,20 @@ import kotlinx.coroutines.delay
 import org.json.JSONObject
 import java.lang.ref.WeakReference
 
-class DuoApplication : Application() {
+class DuoApplication : Application(), ViewModelStoreOwner {
+    override val viewModelStore = ViewModelStore()
+    // Every Folio screen must save through the same model, including widget IDs.
+    internal val launcherModel: LauncherModel by lazy {
+        ViewModelProvider(this, ViewModelProvider.AndroidViewModelFactory.getInstance(this))[LauncherModel::class.java]
+    }
+
     override fun onCreate() {
         super.onCreate()
         CrashLog.install(this)
+        AppSecurity.initialize(this)
         DiscoverEmbedding.initialize(this)
         DiscoverBounds.initialize(this)
-        // Matches the Market's background-refresh setting to reality, so turning it off really stops it.
-        MarketRefreshJob.schedule(this)
+        ContentSearchJob.schedule(this, refresh = true)
     }
 }
 
@@ -165,7 +173,7 @@ abstract class DiscoverPageActivity : ComponentActivity() {
 }
 
 class DiscoverActivity : DiscoverPageActivity() {
-    private val model: LauncherModel by viewModels()
+    private val model: LauncherModel by lazy { (application as DuoApplication).launcherModel }
     private val fullSize = mutableStateOf(Size.Zero)
     private var feedLaunched = false
     private var viewportReady = false
@@ -175,7 +183,7 @@ class DiscoverActivity : DiscoverPageActivity() {
         feedLaunched = savedInstanceState != null
         DiscoverSession.host = WeakReference(this)
         DiscoverBounds.resetViewport()
-        configureDiscoverWindow(model.state.value.verticalStatus)
+        configureDiscoverWindow(!model.state.value.showSystemStatusBar)
         val bounds = windowManager.currentWindowMetrics.bounds
         fullSize.value = Size(bounds.width().toFloat(), bounds.height().toFloat())
         if (!DiscoverEmbedding.supported(this)) {
@@ -192,11 +200,17 @@ class DiscoverActivity : DiscoverPageActivity() {
         val monitor = DeviceStatusMonitor(this).also { lifecycle.addObserver(it) }
         val startupApps = DiscoverSession.apps
         setContent {
-            val state by model.state.collectAsStateWithLifecycle()
+            val savedState by model.state.collectAsStateWithLifecycle()
+            val solidGlass = savedState.reduceTransparency || rememberSystemHighContrast()
+            val state = savedState.withCommonMaterial().let { if (solidGlass) it.withSolidGlass() else it }
             val status = ScreenshotMode.status(monitor.state.collectAsStateWithLifecycle().value, ScreenshotMode.on.collectAsStateWithLifecycle().value)
             DuoTheme(rememberSavedAppearance().dark) {
+            val backdrop = rememberMaterialBackdrop()
             // Discover is its own window, so it needs the Glass setting too (the Side Bar outline follows it).
-            androidx.compose.runtime.CompositionLocalProvider(LocalGlassLook provides GlassLook(state.widgetGlass, state.glassOutline)) {
+            androidx.compose.runtime.CompositionLocalProvider(LocalGlassLook provides GlassLook(state.widgetGlass, state.glassOutline),
+                LocalBackgroundMaterial provides state.backgroundMaterial, LocalSolidGlass provides solidGlass,
+                LocalMaterialBackdrop provides backdrop,
+                LocalSystemStatusBarVisible provides state.showSystemStatusBar) {
                 BackHandler { DiscoverSession.requestHome(this) }
                 DiscoverDock(if (state.loading) state.copy(apps = startupApps) else state, status, fullSize.value, onLaunch = ::launchApp,
                     onHome = { DiscoverSession.requestHome(this) }, onSearch = { DiscoverSession.home(this, search = true) },
@@ -207,14 +221,16 @@ class DiscoverActivity : DiscoverPageActivity() {
         if (!DiscoverBounds.available) window.decorView.post { viewportReady = true; openFeed() }
     }
     private fun openFeed() {
-        if (!viewportReady || feedLaunched || isFinishing) return
+        if (!viewportReady || feedLaunched || isFinishing ||
+            AppSecurity.isProtected(DiscoverClient.GOOGLE_PACKAGE, android.os.Process.myUserHandle())) return
         feedLaunched = true
         // Attach in place: this activity is content within the Discover page, not another page.
         startActivity(Intent(this, DiscoverFeedActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION), DiscoverBounds.launchOptions())
     }
-    override fun onResume() { super.onResume(); model.refresh(); configureDiscoverWindow(model.state.value.verticalStatus) }
+    override fun onResume() { super.onResume(); model.refresh(); configureDiscoverWindow(!model.state.value.showSystemStatusBar) }
     override fun onDestroy() { if (DiscoverSession.host.get() === this) DiscoverSession.host.clear(); super.onDestroy() }
-    private fun launchApp(app: AppEntry) {
+    private fun launchApp(app: AppEntry) = AppSecurity.run(this, app.packageName, app.user) { launchAuthenticatedApp(app) }
+    private fun launchAuthenticatedApp(app: AppEntry) {
         try {
             val user = getSystemService(UserManager::class.java).getUserForSerialNumber(app.userSerial)
                 ?: throw IllegalStateException("Profile is unavailable")
@@ -235,7 +251,7 @@ class DiscoverFeedActivity : DiscoverPageActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         DiscoverSession.feed = WeakReference(this)
-        val vertical = runCatching { JSONObject(getSharedPreferences("launcher", 0).getString("state", "{}") ?: "{}").optBoolean("verticalStatus", true) }.getOrDefault(true)
+        val vertical = !savedSystemStatusBarVisible()
         configureDiscoverWindow(vertical)
         frame = DiscoverFrame(this, vertical)
         val bounds = windowManager.maximumWindowMetrics.bounds
@@ -254,6 +270,7 @@ class DiscoverFeedActivity : DiscoverPageActivity() {
             onClosed = { DiscoverSession.home(this) })
         setContent {
             DuoTheme(rememberSavedAppearance().dark) {
+                val protected = AppSecurity.isProtected(DiscoverClient.GOOGLE_PACKAGE, android.os.Process.myUserHandle())
                 BackHandler { returnHome() }
                 var showMessage by remember { mutableStateOf(false) }
                 LaunchedEffect(message.value) {
@@ -271,17 +288,18 @@ class DiscoverFeedActivity : DiscoverPageActivity() {
                         color = Glass, border = BorderStroke(1.dp, Color.White.copy(alpha = .4f))) {
                         // Recovery is only shown while connecting or after a real error. A native
                         // swipe must never reveal the old loading controls behind a loaded feed.
-                        if (showMessage) Column(Modifier.fillMaxSize().graphicsLayer {
+                        if (protected || showMessage) Column(Modifier.fillMaxSize().graphicsLayer {
                             translationX = -(1f - progress) * DiscoverMotion.pageWidth
                         }.padding(FolioSpace.XXL.dp).verticalScroll(rememberScrollState()),
                             verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(stringResource(R.string.discover), style = MaterialTheme.typography.headlineMedium)
                             Spacer(Modifier.height(16.dp))
-                            Text(message.value ?: "Google Discover", style = MaterialTheme.typography.bodyLarge)
+                            Text(if (protected) stringResource(R.string.security_required) else message.value ?: "Google Discover", style = MaterialTheme.typography.bodyLarge)
                             Spacer(Modifier.height(20.dp))
-                            FolioButton(stringResource(R.string.retry), ::connectSafely, style = FolioButtonStyle.TONAL,
+                            if (!protected) FolioButton(stringResource(R.string.retry), ::connectSafely, style = FolioButtonStyle.TONAL,
                                 icon = Icons.Rounded.Refresh, tag = "discover-retry")
-                            TextButton(onClick = ::openGoogle) { Text(stringResource(R.string.open_google)) }
+                            if (!AppSecurity.isHidden(DiscoverClient.GOOGLE_PACKAGE, android.os.Process.myUserHandle()))
+                                TextButton(onClick = ::openGoogle) { Text(stringResource(R.string.open_google)) }
                             TextButton(onClick = ::returnHome) { Text(stringResource(R.string.back_to_home)) }
                         }
                     }
@@ -338,7 +356,7 @@ class DiscoverFeedActivity : DiscoverPageActivity() {
     }
     private fun openGoogle() {
         val intent = packageManager.getLaunchIntentForPackage(DiscoverClient.GOOGLE_PACKAGE)
-        if (intent != null) runCatching { startActivity(intent) }
+        if (intent != null) AppSecurity.startActivity(this, intent)
         else Toast.makeText(this, R.string.install_or_enable_the_google_app_first, Toast.LENGTH_LONG).show()
     }
 }
@@ -351,7 +369,10 @@ private fun DiscoverDock(state: LauncherState, status: DeviceStatus, fullSize: S
     val fullWidth = fullSize.width / density.density
     val classScale = androidx.compose.ui.platform.LocalConfiguration.current.classScale
     val preset = if (fullWidth * classScale >= EXPANDED_HOME_MIN_WIDTH_DP && fullSize.height / density.density * classScale >= HOME_REGULAR_MIN_HEIGHT_DP) state.expanded else state.compact
-    val apps = remember(state.apps) { state.apps.associateBy { it.id } }
+    val apps = remember(state.apps, state.appSecurity) {
+        state.apps.filter { !AppSecurity.isHidden(it, state.appSecurity) &&
+            (!it.isShortcut || !AppSecurity.isProtected(it, state.appSecurity)) }.associateBy { it.id }
+    }
     val progress = DiscoverMotion.progress.floatValue
     val backgroundRevision = LauncherBackgroundCache.revision.intValue
     val backgroundPhoto = remember(backgroundRevision) {
@@ -359,7 +380,7 @@ private fun DiscoverDock(state: LauncherState, status: DeviceStatus, fullSize: S
     }
     DiscoverMotion.pageWidth = (fullWidth - preset.dockWidth - 28f) * density.density
     Box(Modifier.fillMaxSize().testTag("discover-chrome").semantics { testTagsAsResourceId = true }) {
-        Canvas(Modifier.fillMaxSize()) {
+        Canvas(Modifier.fillMaxSize().captureMaterialBackdrop()) {
             val offset = fullSize.width - size.width
             translate(left = -offset) {
                 // Draw the same full-screen wallpaper coordinates in this narrow viewport.
@@ -402,10 +423,11 @@ private fun DiscoverDock(state: LauncherState, status: DeviceStatus, fullSize: S
                     // The whole rail, location slot included: the dock goes below all of it.
                     statusHeight = it.height / density.density
                 },
-                compact = maxHeight < COMPACT_DOCK_MAX_HEIGHT_DP.dp, iconSize = dockIconSize(geometry.iconSize).dp)
+                compact = maxHeight < COMPACT_DOCK_MAX_HEIGHT_DP.dp)
             Surface(Modifier.align(Alignment.TopEnd).padding(end = FolioSpace.MEDIUM.dp).offset(y = geometry.dockTop.dp)
-                .width(preset.dockWidth.dp).height(geometry.dockHeight.dp).testTag("discover-dock"),
-                shape = RoundedCornerShape(30.dp), color = Glass.copy(alpha = .32f), border = BorderStroke(1.dp, Color.White.copy(alpha = .3f))) {
+                .width(preset.dockWidth.dp).height(geometry.dockHeight.dp).materialBackground(SquircleCornerShape(30.dp), tint = Glass)
+                .testTag("discover-dock"),
+                shape = SquircleCornerShape(30.dp), color = Color.Transparent) {
                 Column(Modifier.padding(vertical = FolioSpace.SMALL.dp).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
                     state.dock.forEachIndexed { index, id ->
                         val app = apps[id]

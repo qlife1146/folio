@@ -16,15 +16,6 @@ const sources = {
     { version: '0.6.6', date: '2026-09-21', body: '### Added\n- **The Folio Market:** a store.\n- **Keyd:** a keyboard.' },
     { version: '0.6.5', date: '2026-09-20', body: '### Fixed\n- **A crash:** gone.' },
   ],
-  roadmap: async () => [
-    { name: 'Folio 0.6.6', shipped: true, items: [{ title: 'Market', detail: 'Shipped.', status: 'done' }] },
-    { name: 'Next', shipped: false, items: [{ title: 'Language in Settings', detail: 'Pick it yourself.', status: 'planned' }] },
-    { name: 'Later', shipped: false, items: [{ title: 'Dock Drawer', detail: 'Swipe in on the dock.', status: 'planned' }] },
-  ],
-  tweaks: async () => [
-    { id: 'com.mccal.folio.cabinet', name: 'Cabinet', description: 'App panels.', version: '1.0.0', screens: ['cover'] },
-    { id: 'com.mccal.folio.harborline', name: 'Harborline', description: 'A dock that swells.', version: '1.0.0', screens: [] },
-  ],
   screens: async () => [
     { name: 'Fold8 cover', width: 360, height: 900, group: 'fold' },
     { name: 'Fold8 inner', width: 932, height: 1080, group: 'fold' },
@@ -39,7 +30,7 @@ const sources = {
 
 test('every registered command has a handler, and every handler is registered', async () => {
   const names = COMMANDS.map((command) => command.name).sort()
-  assert.deepEqual(names, ['changelog', 'help', 'roadmap', 'screens', 'tweak', 'version'])
+  assert.deepEqual(names, ['changelog', 'help', 'screens', 'version'])
   for (const name of names) {
     const answer = await run(name, name === 'screens' ? { width: 932 } : {}, sources)
     assert.ok(answer.length > 0, `${name} said nothing`)
@@ -74,33 +65,12 @@ test('an unknown version is a helpful answer, not an error', async () => {
   assert.match(answer, /0\.6\.6/)
 })
 
-test('roadmap leaves out what has already shipped', async () => {
-  const answer = await run('roadmap', {}, sources)
-  assert.match(answer, /\*\*Next\*\*/)
-  assert.match(answer, /\*\*Later\*\*/)
-  assert.doesNotMatch(answer, /Folio 0\.6\.6/)
-})
-
-test('roadmap narrows to one section', async () => {
-  const answer = await run('roadmap', { when: 'later' }, sources)
-  assert.match(answer, /Dock Drawer/)
-  assert.doesNotMatch(answer, /Language in Settings/)
-})
-
 test('help matches a page by part of its name, and lists them all when nothing matches', async () => {
   assert.match(await run('help', { topic: 'gestures' }, sources), /help\/gestures\//)
   assert.match(await run('help', { topic: 'update' }, sources), /update-will-not-install/)
   const miss = await run('help', { topic: 'sandwiches' }, sources)
   assert.match(miss, /Nothing about "sandwiches"/)
   assert.match(miss, /help\/widgets\//)
-})
-
-test('tweak finds one by name, and lists them without one', async () => {
-  assert.match(await run('tweak', { name: 'cabinet' }, sources), /\*\*Cabinet\*\* 1\.0\.0/)
-  const all = await run('tweak', {}, sources)
-  assert.match(all, /Cabinet/)
-  assert.match(all, /Harborline/)
-  assert.match(await run('tweak', { name: 'nope' }, sources), /No tweak called nope/)
 })
 
 test('screens uses the same pane rule the app does', async () => {

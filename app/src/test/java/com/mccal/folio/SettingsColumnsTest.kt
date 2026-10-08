@@ -5,7 +5,7 @@ import org.junit.Test
 
 /**
  * How many columns Settings shows, on the windows Folio actually meets. The rule is about the window, never the
- * device: 700 dp for two columns, as the Market uses, and [THREE_PANES_DP] (1200) for three.
+ * device: 700 dp for two columns and [THREE_PANES_DP] (1200) for three.
  */
 class SettingsColumnsTest {
     private fun columns(w: Float, h: Float, nested: Boolean = false, onFold: Boolean = false) =

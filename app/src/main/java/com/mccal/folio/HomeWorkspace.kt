@@ -129,6 +129,7 @@ internal fun ExpandedWorkspace(
     onTurnOnWork: (Long) -> Unit,
     onActions: (AppEntry) -> Unit,
     onLibraryActions: (AppEntry) -> Unit,
+    onOpenLibraryCategory: (LibraryCategory, List<AppEntry>) -> Unit,
     onWidget: (Int) -> Unit,
     onFolder: (String) -> Unit,
     onEmptyWidget: (Int) -> Unit,
@@ -233,7 +234,7 @@ internal fun ExpandedWorkspace(
                 Box(Modifier.place((visibleHomePages - 1) * stride + viewportWidth).fillMaxSize()) {
                     AppLibrary(state, libraryQuery, onLibraryQuery, onLaunch, onPinned,
                         active = nativePager.currentPage == libraryPhysicalPage || nativePager.targetPage == libraryPhysicalPage,
-                        onActions = onLibraryActions,
+                        onActions = onLibraryActions, onOpenCategory = onOpenLibraryCategory,
                         modifier = Modifier.fillMaxSize()
                             .graphicsLayer { val b = libraryBack(); scaleX = 1f - .14f * b; scaleY = scaleX; alpha = 1f - .35f * b; translationX = size.width * .08f * b }
                             .padding(start = FolioSpace.LARGE.dp, top = FolioSpace.LARGE.dp, bottom = bottomSpace)
@@ -272,6 +273,8 @@ internal fun HomePagePane(
     modifier: Modifier = Modifier,
 ) {
     val homeOptionsLabel = stringResource(R.string.home_options)
+    // Full-width portrait pages need equal margins around the grid, not the side layout's leading gutter.
+    val gridInset = if (geometry.centeredPortrait) 8.dp else 16.dp
     val homeScroll = rememberScrollState()
     var paneBounds by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
     val pageStart = homeCellIndex(page, 0)
@@ -319,14 +322,14 @@ internal fun HomePagePane(
         .onGloballyPositioned { paneBounds = it.boundsInRoot() }
         .width((geometry.gridWidth + 16f).dp)
         .height((contentHeight - bottomSpace).coerceAtLeast(0.dp))) {
-        Box(Modifier.width(16.dp).fillMaxHeight().testTag("home-options-margin-$page")
+        Box(Modifier.width(gridInset).fillMaxHeight().testTag("home-options-margin-$page")
             .pointerInput(backgroundTarget, drag.active) {
                 detectTapGestures(onTap = { onBackgroundTap() }, onLongPress = {
                     if (!drag.active) onEmptyWidget(backgroundTarget)
                 })
             })
         // The edit controls overlay Home; entering edit mode must not move the grid or its drop targets.
-        Column(Modifier.offset(x = 16.dp).width(geometry.gridWidth.dp).fillMaxHeight()
+        Column(Modifier.offset(x = gridInset).width(geometry.gridWidth.dp).fillMaxHeight()
             .verticalScroll(homeScroll).padding(top = geometry.contentTop.dp, bottom = FolioSpace.SMALL.dp)) {
             val (pageIcon, pageLabels) = (state.pageStyles[page] ?: PageStyle()).apply(geometry, state.labels)
             SharedHomeGrid(page, state.homeSlots, state.leadingSlots, previewSlots, previewLeadingSlots, previewWidgetPlacements,
@@ -344,9 +347,9 @@ internal fun HomePagePane(
 @Composable
 internal fun CircleControl(icon: ImageVector, label: String, tag: String, visualSize: Dp, action: () -> Unit) {
     IconButton(onClick = action, modifier = Modifier.size(visualSize.coerceAtLeast(48.dp)).testTag(tag)) {
-        Box(Modifier.size(visualSize).testTag("$tag-visual").background(Glass.copy(alpha = .22f), CircleShape)
-            .border(1.dp, Color.White.copy(alpha = .25f), CircleShape), contentAlignment = Alignment.Center) {
-            Icon(icon, label, tint = Color.White, modifier = Modifier.size(22.dp))
+        Box(Modifier.size(visualSize).testTag("$tag-visual").materialBackground(CircleShape, tint = FolioGlass.panel),
+            contentAlignment = Alignment.Center) {
+            Icon(icon, label, tint = FolioGlass.ink, modifier = Modifier.size(22.dp))
         }
     }
 }
@@ -490,9 +493,13 @@ internal fun SharedHomeGrid(
                     label = "home insertion visibility $id",
                 )
                 Box(Modifier.offset { animatedOffset }.width(cellWidth).height(rowHeight.dp)
-                    .alpha(opacity).moveActions(id, page, onMove).testTag("home-app-$id"), contentAlignment = Alignment.TopCenter) {
+                    .graphicsLayer {
+                        alpha = opacity
+                        compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.ModulateAlpha
+                    }.moveActions(id, page, onMove).testTag("home-app-$id"), contentAlignment = Alignment.TopCenter) {
                     if (visible) AppTile(app, iconSize, labels,
                         onClick = { if (!edit.active) onLaunch(app, it) }, onLongClick = { onActions(app) },
+                        folderPreviewApp = appsById[drag.source?.appId].takeIf { drag.active && drag.moved && drag.folderPreviewTarget?.index == renderIndex },
                         onRemove = if (edit.active && savedIndex != null) {{ edit.onRemove(DropTarget.Home(savedIndex)) }} else null)
                 }
             }

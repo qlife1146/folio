@@ -2,8 +2,7 @@
  * Where the bot's answers come from. Every one is a file the project already publishes, so the bot cannot tell
  * somebody something the app does not do.
  *
- * Nothing is written down twice: the changelog is the app's CHANGELOG.md, the roadmap is the file Settings › Help ›
- * Roadmap reads, the tweaks are the source index the Market reads, the screens are what ScreenMatrixTest runs.
+ * Nothing is written down twice: the changelog is the app's CHANGELOG.md, and the screens are what ScreenMatrixTest runs.
  */
 const REPO = 'McCal-Codes/folio'
 const RAW = `https://raw.githubusercontent.com/${REPO}/main`
@@ -45,29 +44,6 @@ export const sources = {
       entries.push({ version: match[1], date: match[2] ?? '', body: block.slice(heading.length).trim() })
     }
     return entries
-  },
-
-  async roadmap() {
-    const file = await get(`${RAW}/app/src/main/assets/roadmap.json`, { json: true })
-    return (file.sections ?? []).map((section) => ({
-      name: section.release ? `Folio ${section.release}` : section.title,
-      shipped: Boolean(section.release),
-      items: (section.items ?? []).map(({ title, detail, status }) => ({ title, detail, status })),
-    }))
-  },
-
-  async tweaks() {
-    const index = await get(`${RAW}/docs/sdk/source/index.json`, { json: true })
-    return (index.packages ?? [])
-      .map(({ manifest }) => manifest)
-      .filter((manifest) => manifest?.section === 'tweaks')
-      .map((manifest) => ({
-        id: manifest.id,
-        name: manifest.name,
-        description: manifest.description ?? '',
-        version: manifest.version,
-        screens: manifest.screens ?? [],
-      }))
   },
 
   async screens() {

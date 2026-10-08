@@ -94,6 +94,7 @@ internal fun HomeEditMenu(anchor: androidx.compose.ui.unit.IntRect?, onDismiss: 
     if (!rememberHomePopupVisible(onDismiss = onDismiss)) return
     androidx.compose.ui.window.Popup(popupPositionProvider = position, onDismissRequest = onDismiss,
         properties = androidx.compose.ui.window.PopupProperties(focusable = true)) {
+        PopupBackdropContent {
         Column(Modifier.width(250.dp)
             .graphicsLayer {
                 val g = appear.value; alpha = g.coerceIn(0f, 1f); scaleX = .7f + .3f * g; scaleY = scaleX
@@ -110,6 +111,7 @@ internal fun HomeEditMenu(anchor: androidx.compose.ui.unit.IntRect?, onDismiss: 
             onAddPage?.let { Box(Modifier.testTag("empty-space-add-page")) { MenuRow(stringResource(R.string.add_page), Icons.Rounded.AddToPhotos, onClick = act(it)) }; MenuDivider() }
             onRemovePage?.let { Box(Modifier.testTag("empty-space-remove-page")) { MenuRow(stringResource(R.string.remove_this_empty_page), Icons.Rounded.DeleteOutline, destructive = true, onClick = act(it)) }; MenuDivider() }
             Box(Modifier.testTag("empty-space-customize")) { MenuRow(stringResource(R.string.folio_settings), Icons.Rounded.Tune, onClick = act(onCustomize)) }
+        }
         }
     }
 }

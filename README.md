@@ -6,18 +6,16 @@
 
 <p align="center">
   <b>Folio Launcher: a clean, iPhone-style Home Screen for Android</b><br>
-  with the jailbreak tweaks I always wanted, and none of the lockdown.
+  with layouts and controls designed for the iPhone Duo style.
 </p>
 
 <p align="center">
-  <a href="https://github.com/McCal-Codes/folio/releases/latest"><img src="https://img.shields.io/github/v/release/McCal-Codes/folio?label=download" alt="Download the latest release"></a>
   <a href="https://github.com/McCal-Codes/folio/actions/workflows/ci.yml"><img src="https://github.com/McCal-Codes/folio/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
   <a href="#what-you-need"><img src="https://img.shields.io/badge/Android-12%2B-3DDC84" alt="Android 12+"></a>
   <img src="https://img.shields.io/badge/root-not%20needed-2E5E66" alt="Root not needed">
   <img src="https://img.shields.io/badge/made%20for-foldables-6DB7B4" alt="Made for foldables">
   <img src="https://img.shields.io/badge/inspired%20by-jailbreak%20tweaks-BF5AF2" alt="Inspired by jailbreak tweaks">
-  <a href="https://ko-fi.com/mccal"><img src="https://img.shields.io/badge/Ko--fi-buy%20me%20a%20coffee-FF5E5B" alt="Buy me a coffee on Ko-fi"></a>
 </p>
 
 <p align="center">
@@ -62,7 +60,7 @@ I found jailbreaking in middle school and loved it. iOS keeps getting more locke
 open (for now, until Google locks theirs down too). I also have an app in testing on the App Store, and that alone was
 a three-month process, so I'll do what it takes to make what I want.
 
-**Have an idea? Tell me!** And if you want to help build Folio, or make a theme or a tweak for it, [let me know](#get-involved).
+**Have an idea? Tell me!** If you want to help build Folio, [let me know](#get-involved).
 
 ## A few of my favorite parts
 
@@ -71,12 +69,12 @@ way of bringing that back:
 
 - **Badges that match the app.** Badges can take the color of each app's icon, like the ColorBadges tweak. It was more
   complex than I expected, but it's neat, so check it out (Settings › Icons & Side Bar › Badge color).
-- **Themes, and more on top.** I loved SnowBoard. Android already has icon packs and themes, so Folio builds on them
-  with its own themes you can save and share.
+- **iPhone-style appearance.** Choose default, dark or tinted icons, notification badges, wallpaper and glass effects
+  directly in Settings.
 - **The iPhone Duo Side Bar.** The status bar, Dynamic Island and dock live on the right edge. Thanks to
   [DuoLauncher](https://github.com/jakesgoodapps/DuoLauncher), whose dev made it possible for me to build on top of their work.
 - **Left-handed mode and Spotlight.** Flip the Side Bar to the left, and search everything from Spotlight.
-- **Coming soon: Page Effects,** inspired by Barrel. See Settings › Roadmap for what else is planned.
+- **Page Effects,** inspired by Barrel, are available in Settings › Gestures & Actions.
 
 There's a lot to this launcher, and it's fun. I hope you have as much fun with it as I've had making it.
 
@@ -84,12 +82,7 @@ There's a lot to this launcher, and it's fun. I hope you have as much fun with i
 
 <p align="center">
   <img src="docs/images/folio-060-home.gif" width="720" alt="Folio 0.6.0 on the unfolded Galaxy Z Fold8, one feature at a time: Home and the Side Bar, Spotlight, the App Library, Control Center, jiggle mode, the widget gallery, Dock Magnification and App Panels"><br>
-  <sub>Home, Spotlight, App Library, Control Center, jiggle mode, widgets and tweaks</sub>
-</p>
-
-<p align="center">
-  <img src="docs/images/folio-060-personalize.gif" width="720" alt="Folio 0.6.0 personalization: tinted icons in several colors, left-handed mode, the Classic, Dark, Tinted and Clear themes, the Tweak Library, the Roadmap and the Fold Effect preview"><br>
-  <sub>Tinted icons, left-handed mode, themes, the Tweak Library, the Roadmap and the fold effect</sub>
+  <sub>Home, Spotlight, App Library, Control Center, jiggle mode, widgets and app controls</sub>
 </p>
 
 <table>
@@ -109,15 +102,6 @@ There's a lot to this launcher, and it's fun. I hope you have as much fun with i
   </tr>
   <tr>
     <td align="center" colspan="3"><img src="docs/images/folio-inner-settings.webp" width="640" alt="Settings in split view on the unfolded screen: the sidebar on the left and the Icons &amp; Side Bar page with a live Home preview on the right"><br><sub>Settings in split view, like iPad</sub></td>
-  </tr>
-  <tr>
-    <th colspan="3">New in 0.6.0</th>
-  </tr>
-  <tr>
-    <td align="center" colspan="3"><img src="docs/images/folio-inner-tweak-library.webp" width="640" alt="The Tweak Library on the unfolded screen: App Panels, Dock Magnification, Notification App Row, Tinted Notifications and Album Art Colors, each with its inspiration and a Get or Open button"><br><sub>The Tweak Library: get only the tweaks you want</sub></td>
-  </tr>
-  <tr>
-    <td align="center" colspan="3"><img src="docs/images/folio-inner-roadmap.webp" width="640" alt="The Roadmap in Settings: Tweak Library, Software Update, Badge styles and Folder options marked In this update, then The Folio app and Home grid columns marked Planned"><br><sub>The Roadmap in Settings</sub></td>
   </tr>
 </table>
 
@@ -141,25 +125,21 @@ There's a lot to this launcher, and it's fun. I hope you have as much fun with i
 - Clear Badge from an app's long-press menu.
 - Focus modes with schedules and the Home pages you want to see.
 - Download rings on updating apps, blue dots on new ones, and Add to Home Screen for shortcuts and websites.
-- Settings built like iOS: menus with checkmarks, segmented controls, switches, sheets and alerts. What's New shows up after updates.
+- Settings built like iOS: menus with checkmarks, segmented controls, switches, sheets and alerts.
 
-**Tweaks (you pick which ones you get)**
-- Ideas from jailbreak tweaks I liked (Velox, Activator, Velvet, Axon, ColorFlow, Harbor), rebuilt from scratch.
-- Get the ones you want from the Tweak Library, Sileo-style. Only those show up in Settings, and you can remove them any time.
-- Turn a tweak on for just the cover or just the inner screen, and Safe Mode if something crashes.
-
-**Themes**
-- Save your look as a theme file, import one, or share a `.json` theme straight to Folio from Files or Chrome.
-- Grab community themes (or add yours) in [`themes/`](themes/).
+**Appearance and app controls**
+- Default, dark and tinted icons, glass effects, notification badges and wallpaper controls.
 - Pick an app icon (Teal, Soft or Olive), and live Clock and Calendar icons that match your other icons.
+- App icon panels and dock magnification are direct switches in Home Screen & Dock.
+- Notification app rows and app-colored notifications are in Notifications & Control Center.
+- Album-art colors for media are in Dynamic Island settings.
 
-**Betas (off until you turn them on)**
+**Layout tools (off until you turn them on)**
 - Layout History: saves Home before big changes so you can go back.
 - Recent App Dots: a dot beside dock apps you used in the last hour.
 
 **Private**
-- No accounts, no ads, no analytics. Folio itself doesn't send anything anywhere unless you share a crash report or check
-  for updates (which only asks GitHub for the latest release).
+- No accounts, no ads, no analytics. Crash reports stay on your phone unless you share them.
   Google search, Discover and widgets from other apps use those apps' own services. Every permission is optional and
   explained where it's used. Every permission is listed in [PERMISSIONS.md](PERMISSIONS.md), with what happens if you
   say no; more about data in [PRIVACY.md](PRIVACY.md).
@@ -186,23 +166,8 @@ Android doesn't allow everything iOS does, so a few things work differently:
 
 ## Install
 
-Download the APK from [Releases](https://github.com/McCal-Codes/folio/releases), open it on your phone and allow the
-install. Then press Home and pick Folio, or open Folio and tap **Set as home app**.
-
-<p align="center">
-  <a href="https://github.com/McCal-Codes/folio/releases/latest"><img src="https://img.shields.io/badge/Download-Folio%20APK-2E5E66?style=for-the-badge&logo=android&logoColor=white" alt="Download the latest Folio APK"></a>
-  <a href="https://apps.obtainium.imranr.dev/redirect?r=obtainium%3A%2F%2Fapp%2F%257B%2522id%2522%253A%2522com.mccal.folio%2522%252C%2522url%2522%253A%2522https%253A%252F%252Fgithub.com%252FMcCal-Codes%252Ffolio%2522%252C%2522author%2522%253A%2522McCal-Codes%2522%252C%2522name%2522%253A%2522Folio%2522%257D"><img src="https://img.shields.io/badge/Add%20to-Obtainium-6DB7B4?style=for-the-badge&logo=android&logoColor=white" alt="Add Folio to Obtainium"></a>
-</p>
-
-**Updates on their own:** tap **Add to Obtainium** above on your phone.
-[Obtainium](https://github.com/ImranR98/Obtainium) installs and updates apps straight from GitHub Releases, so Folio
-updates like any other app without a store. The button opens Obtainium with Folio already filled in; without Obtainium
-installed it explains what it is first.
-
-Each release lists the APK's SHA-256 and the signing certificate, so you can check an update comes from the same key.
-Folio's signing certificate SHA-256 is `bad8e099557b70c690e71a3fffe13561c8662c20612047ce1e2559a1c14d8441`.
-A release APK can't install over a build you made yourself (different signing keys); see
-[troubleshooting](docs/troubleshooting.md#an-update-wont-install).
+Install an APK built from this project, then press Home and pick Folio, or open Folio and tap **Set as home app**.
+Use the same signing key for subsequent builds to install them over the existing app.
 
 ## Build it
 
@@ -226,24 +191,15 @@ rest are optional and asked for where they're used, like notification access for
 service for pull-down panels. Every permission is listed with what it's for in Settings › Privacy & Permissions, in
 [PERMISSIONS.md](PERMISSIONS.md) (all 14, with what breaks if you say no) and in [PRIVACY.md](PRIVACY.md).
 
-**Does Folio send my data anywhere?** No. No accounts, no ads, no analytics. Crash reports stay on your phone unless you
-share one. Software Update only asks GitHub for the latest release when you check (or once a day if you turn that on).
-
-**How do I update?** Settings › Software Update checks GitHub, verifies the download and installs it. You can also
-turn on daily checks and automatic installs there, or use Obtainium.
-
-**Can I try new features early?** Yes: Settings › Software Update › Beta Updates › Folio Beta. Betas are GitHub
-pre-releases, signed with the same key, and may have bugs.
+**Does Folio send my data anywhere?** No accounts, ads or analytics. Crash reports stay on your phone unless you
+share one. Google search, Discover and third-party widgets use their own services.
 
 **How do I go back to my old launcher?** Settings › Apps › Default apps › Home app on your phone (the exact path can
 vary by phone). Your Folio layout stays saved if you switch back later.
 
 **Something broke. What do I do?** Settings › Help › Report a Bug in Folio opens the bug form with your details filled
-in. If Folio crashes a few times in a row, it opens in Safe Mode with tweaks paused. More in
+in. If Folio crashes a few times in a row, it opens in Safe Mode with optional features paused. More in
 [troubleshooting](docs/troubleshooting.md).
-
-**What's coming next?** See Settings › Roadmap in the app, or suggest something with the
-[feature form](https://github.com/McCal-Codes/folio/issues/new/choose).
 
 ## Where things are
 
@@ -253,22 +209,18 @@ in. If Folio crashes a few times in a row, it opens in Safe Mode with tweaks pau
   - `StatusRail.kt`, `CutoutIsland.kt`: the Side Bar status bar and Dynamic Island
   - `CustomizationSheet.kt`, `IosControls.kt`, `FolioSheet.kt`: Settings and the iOS controls
 - `app/src/test/`: unit tests, including the screen size tests
-- `themes/`: community themes and the theme format
 - `docs/`: [user guide](docs/user-guide.md), [troubleshooting](docs/troubleshooting.md), [architecture](docs/architecture.md)
 
 ## Get involved
 
 **Bug reports, please!** That's the help I need most right now. Once there's a community, I'll give a shoutout (or
-something for whoever finds the most). Themes and code can come later. I'm one person doing this, but anyone who's
+something for whoever finds the most). Code contributions are welcome. I'm one person doing this, but anyone who's
 interested is welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first. No GPL code and nothing that needs root.
 
 - Found a bug? In Folio, go to Settings › Help › **Report a Bug**, or use the [bug form](https://github.com/McCal-Codes/folio/issues/new/choose).
 - Questions or want to show off your setup? [Discussions](https://github.com/McCal-Codes/folio/discussions).
 - Security problem? Report it privately, see [SECURITY.md](SECURITY.md).
 - Everyone here follows the [Code of Conduct](CODE_OF_CONDUCT.md).
-
-If you want to support the project, you can [buy me a coffee on Ko-fi](https://ko-fi.com/mccal). It's never
-expected, but it's always appreciated.
 
 ## Contact
 

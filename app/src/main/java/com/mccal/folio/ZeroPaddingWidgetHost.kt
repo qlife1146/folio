@@ -10,10 +10,21 @@ import android.util.SizeF
 import android.view.MotionEvent
 import androidx.compose.ui.geometry.Offset
 
-internal class ZeroPaddingWidgetHost(context: Context, hostId: Int) : AppWidgetHost(context, hostId) {
+internal class ZeroPaddingWidgetHost(context: Context, hostId: Int,
+    private val onProvidersUpdated: () -> Unit = {}) : AppWidgetHost(context, hostId) {
     override fun onCreateView(context: Context, appWidgetId: Int,
         appWidget: AppWidgetProviderInfo): AppWidgetHostView =
         ZeroPaddingWidgetHostView(context)
+
+    override fun onProviderChanged(appWidgetId: Int, appWidget: AppWidgetProviderInfo) {
+        super.onProviderChanged(appWidgetId, appWidget)
+        onProvidersUpdated()
+    }
+
+    override fun onProvidersChanged() {
+        super.onProvidersChanged()
+        onProvidersUpdated()
+    }
 }
 
 private class ZeroPaddingWidgetHostView(context: Context) : AppWidgetHostView(context) {

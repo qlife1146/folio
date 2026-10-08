@@ -24,6 +24,13 @@ internal object FolioGlass {
     val module = FolioColors.SecondaryBackground.copy(alpha = .76f)
     /** Cards and rows (notifications, Spotlight sections, search field). */
     val card = Color(0xFF242428).copy(alpha = .82f)
+    /** Shared launcher panels follow app appearance, independently of wallpaper text contrast. */
+    val panel: Color
+        @androidx.compose.runtime.Composable get() = if (LocalDuoPalette.current.dark) card else Color(0xFFF2F2F7).copy(alpha = .82f)
+    val ink: Color
+        @androidx.compose.runtime.Composable get() = if (LocalDuoPalette.current.dark) Color.White else Color(0xFF1C1C1E)
+    val secondaryInk: Color
+        @androidx.compose.runtime.Composable get() = ink.copy(alpha = .62f)
     /** Controls sitting on a card (inactive toggles, pills, chips). */
     val raised = Color.White.copy(alpha = .14f)
     /** Hairline edge that separates glass from glass. */
@@ -44,8 +51,11 @@ internal val FolioSheetColors = androidx.compose.material3.darkColorScheme(
     outline = Color(0xFF545458), outlineVariant = Color(0xFF38383A), error = FolioColors.Red,
 )
 
-/** Set while any launcher sheet is open, so Home blurs behind it like the other overlays. */
+/** Open sheets used for overlay animations and visibility. */
 internal val LauncherSheetsOpen = androidx.compose.runtime.mutableIntStateOf(0)
+
+/** Tracks app menus so Spotlight keeps its lifted icon and menu sharp. */
+internal val LauncherContextMenusOpen = androidx.compose.runtime.mutableIntStateOf(0)
 
 /** Full-screen pages (Setup, Settings pages): nothing behind them is visible, so Home skips its blur while one is up. */
 internal val LauncherPagesOpen = androidx.compose.runtime.mutableIntStateOf(0)

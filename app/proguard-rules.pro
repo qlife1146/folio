@@ -3,6 +3,9 @@
 # infer these references from the strings used by Class.forName/getMethod/Proxy.
 -keep class androidx.window.extensions.** { *; }
 
+# PDFBox's optional JPEG2000 decoder is not bundled; PDF text extraction does not require it.
+-dontwarn com.gemalto.jp2.JP2Decoder
+
 # Android manifest components and directly constructed widget-host classes are traced by AGP/R8.
 # Layout and backup persistence use org.json with explicit keys, so there are no model classes
 # that require broad reflection or serialization keep rules.

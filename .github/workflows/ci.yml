@@ -7,8 +7,6 @@ on:
   # request stays red after you label it until someone pushes a commit, which teaches people to ignore the check.
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
-  schedule:
-    - cron: '17 4 * * 1' # weekly fuzzing
   workflow_dispatch:
 
 permissions:
@@ -33,7 +31,7 @@ jobs:
       - name: No private keys in the repository
         run: bash tools/check-secrets.sh
       - name: Unit tests, lint and debug build
-        run: ./gradlew :app:testDebugUnitTest :market:testDebugUnitTest :app:lintDebug :market:lintDebug :app:assembleDebug
+        run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 
   # The parts of the releases standard a machine can see: a change to what ships carries its own changelog line,
   # and a version bump comes on its own (docs/standards/releases.md, REL-7 and REL-13). Pull requests only, since
@@ -49,30 +47,3 @@ jobs:
         env:
           PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         run: bash tools/check-release-rules.sh "origin/${{ github.base_ref }}"
-
-  # Fuzzes every package parser for five minutes each (Jazzer). Not on every push: it's slow.
-  fuzz:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
-        with:
-          distribution: temurin
-          java-version: 17
-      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
-      - name: Fuzz the parsers
-        env:
-          JAZZER_FUZZ: 1
-        run: |
-          for target in manifest depiction entry index revoked archive tweaks jsonGuard versions localizedText authorSignature authorPayload; do
-            ./gradlew :market:testDebugUnitTest --tests "*ParserFuzzTest.$target"
-          done
-      - name: Keep any input that failed
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: fuzz-findings
-          path: |
-            market/src/test/resources/com/mccal/folio/market/ParserFuzzTestInputs/**
-            market/build/reports/tests/**

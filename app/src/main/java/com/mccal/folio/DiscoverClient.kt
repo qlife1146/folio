@@ -10,6 +10,10 @@ import android.view.Gravity
 import android.animation.ValueAnimator
 import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 
 /** Small, independently implemented client for Google's optional launcher-overlay service.
  * The wire method order is documented in docs/DISCOVER.md. No Google/Lawnchair code is bundled.
@@ -41,8 +45,23 @@ internal class DiscoverClient(
     private var closeCompleted = false
     private var closeAnimator: ValueAnimator? = null
 
+    init {
+        AppSecurity.initialize(activity)
+        (activity as? LifecycleOwner)?.lifecycleScope?.launch {
+            AppSecurity.revision.collect { blockProtectedFeed() }
+        }
+    }
+
+    /** Authentication permits opening Google itself, never embedding its protected content. */
+    private fun blockProtectedFeed(): Boolean {
+        if (!AppSecurity.isProtected(GOOGLE_PACKAGE, Process.myUserHandle())) return false
+        disconnect()
+        onState(activity.getString(R.string.security_required))
+        return true
+    }
+
     fun connect() {
-        if (activity.isDestroyed || activity.isFinishing) return
+        if (activity.isDestroyed || activity.isFinishing || blockProtectedFeed()) return
         disconnect()
         trace { "connect: pagerDriven=$pagerDriven verticalStatus=$verticalStatus" }
         onState("Connecting to Discover…")
@@ -55,7 +74,7 @@ internal class DiscoverClient(
                 val scroll = if (code == 1) data.readFloat() else 0f
                 val status = if (code == 2) data.readInt() else 0
                 handler.post {
-                    if (generation != attempt || remote == null) return@post
+                    if (generation != attempt || remote == null || blockProtectedFeed()) return@post
                     trace { if (code == 2) "status=$status ready=${status and 1 != 0} closing=$closing resumed=$resumed"
                         else "scroll=%.3f tracking=%b closing=%b".format(scroll, dismissal.tracking, closing) }
                     if (code == 2) {
@@ -91,7 +110,7 @@ internal class DiscoverClient(
         }
         val binding = object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName, service: IBinder) {
-                if (generation != attempt) return
+                if (generation != attempt || blockProtectedFeed()) return
                 // A rejected or stale Google binding can accept one-way transactions without
                 // supplying the overlay interface. Show recovery instead of waiting for callbacks.
                 if (runCatching { service.interfaceDescriptor }.getOrNull() != OVERLAY) {
@@ -101,7 +120,7 @@ internal class DiscoverClient(
                 remote = service
                 trace { "bound to ${name.flattenToShortString()}" }
                 handler.post {
-                    if (generation != attempt || activity.isDestroyed) return@post
+                    if (generation != attempt || activity.isDestroyed || blockProtectedFeed()) return@post
                     val attrs = WindowManager.LayoutParams().apply {
                         copyFrom(activity.window.attributes)
                         gravity = Gravity.TOP or Gravity.LEFT
@@ -159,8 +178,9 @@ internal class DiscoverClient(
         }, 12_000)
     }
 
-    fun resume() { resumed = true; if (ready) { if (pagerDriven) { send(8); applyPage() } else show() } else if (remote != null) send(8) }
+    fun resume() { if (blockProtectedFeed()) return; resumed = true; if (ready) { if (pagerDriven) { send(8); applyPage() } else show() } else if (remote != null) send(8) }
     fun page(progress: Float, scrolling: Boolean) {
+        if (blockProtectedFeed()) return
         val request = ++pageRequest
         desiredProgress = progress.coerceIn(0f, 1f)
         if (!ready || !resumed) return
@@ -243,6 +263,8 @@ internal class DiscoverClient(
     }
 
     private fun send(code: Int, payload: Parcel.() -> Unit = {}) {
+        // Closing and detaching remain allowed so a newly protected native window is removed.
+        if (code != 5 && code != 6 && blockProtectedFeed()) return
         val binder = remote ?: return
         trace { "send ${transactionName(code)}" }
         val data = Parcel.obtain()

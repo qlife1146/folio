@@ -42,7 +42,7 @@ internal object UpNext {
     }
 
     fun openEvent(context: Context, event: UpNextEvent) = runCatching {
-        context.startActivity(Intent(Intent.ACTION_VIEW, ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, event.id))
+        AppSecurity.startActivity(context, Intent(Intent.ACTION_VIEW, ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, event.id))
             .putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, event.begin).putExtra(CalendarContract.EXTRA_EVENT_END_TIME, event.end)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }

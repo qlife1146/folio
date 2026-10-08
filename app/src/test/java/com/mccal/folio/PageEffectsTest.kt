@@ -9,8 +9,8 @@ import org.junit.Test
 import kotlin.math.abs
 
 /**
- * Page Effects: the maths each effect turns a page position into, that None is the default everywhere, and that the
- * feature is switched off at its entry point rather than only hidden ([PageEffect], [FeatureGate.PAGE_EFFECTS]).
+ * Page Effects: the maths each effect turns a page position into, that None is the default everywhere, and that
+ * Reduce Motion disables spatial effects ([PageEffect]).
  */
 class PageEffectsTest {
     private val root = generateSequence(java.io.File("").absoluteFile) { it.parentFile }.first { java.io.File(it, "CHANGELOG.md").exists() }
@@ -113,13 +113,11 @@ class PageEffectsTest {
         assertTrue("Safe Mode should turn Page Effects off", "pageEffect = PageEffect.NONE" in source("CrashLog.kt"))
     }
 
-    @Test fun `Home asks the gate and Reduce Motion before any of this runs`() {
+    @Test fun `Home asks Reduce Motion before any of this runs`() {
         val screen = source("LauncherScreen.kt")
-        // REL-4a: the gate is asked where the work starts, not only where the setting is drawn.
-        assertTrue("the effect itself should be gated", "FeatureGate.PAGE_EFFECTS.isOpen" in screen)
         // DYN-11 / A11Y-14: spatial motion goes away with Reduce Motion on, and it is read through the composition local.
         assertTrue("Reduce Motion should switch it off", "!LocalReduceMotion.current" in screen)
-        assertTrue("with the gate shut or Reduce Motion on it has to fall back to None", "else PageEffect.NONE" in screen)
+        assertTrue("Reduce Motion has to fall back to None", "else PageEffect.NONE" in screen)
         // A drop lands by coordinates, so nothing may transform a page while an icon or widget is being moved.
         assertTrue("moving an icon has to switch it off", "!drag.active && !resize.active" in screen)
         assertTrue("the transform belongs on Home's pages", ".pageEffect(pageEffect, nativePager, physicalPage)" in screen)
@@ -152,10 +150,7 @@ class PageEffectsTest {
             """Row(Modifier.fillMaxSize().testTag("home-surface")""" in screen)
     }
 
-    @Test fun `the setting is only offered where the gate is open, and None is one of the choices`() {
-        val sheet = source("CustomizationSheet.kt")
-        assertTrue("Settings should ask the gate", "FeatureGate.PAGE_EFFECTS.isOpen(gestureContext)" in sheet)
-        assertTrue("the row should be behind the gate", "if (pageEffectsOpen) {" in sheet)
+    @Test fun `None is one of the choices and every effect has a distinct label`() {
         assertTrue(PageEffect.NONE in PageEffect.entries)
         // Every choice needs a name people can read, and no two effects share one.
         val labels = PageEffect.entries.map { it.label }

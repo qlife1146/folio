@@ -72,7 +72,7 @@ internal object DiscoverBounds {
                             val configuration = getConfig.invoke(parent) as Configuration
                             val d = configuration.densityDpi / 160f
                             val dock = dockWidth(context, metrics.bounds.width() / d)
-                            val vertical = runCatching { JSONObject(context.getSharedPreferences("launcher", 0).getString("state", "{}") ?: "{}").optBoolean("verticalStatus", true) }.getOrDefault(true)
+                            val vertical = !context.savedSystemStatusBarVisible()
                             val types = WindowInsets.Type.displayCutout() or WindowInsets.Type.navigationBars() or
                                 (if (vertical) 0 else WindowInsets.Type.statusBars())
                             val insets = metrics.windowInsets.getInsetsIgnoringVisibility(types)

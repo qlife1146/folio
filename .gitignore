@@ -1,3 +1,6 @@
+todo.md
+todo/
+
 .gradle/
 .kotlin/
 **/build/
@@ -21,9 +24,6 @@ discover-probe/
 *.key
 pool.sql
 **/pool.sql
-tools/kofi-worker/.wrangler/
-tools/kofi-worker/.dev.vars
-tools/kofi-worker/node_modules/
 supporter-key.pem
 supporter-codes*.txt
 # The code admin's ledger: every code with who it went to and their email (scripts/code-admin.py).

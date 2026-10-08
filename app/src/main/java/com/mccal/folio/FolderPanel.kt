@@ -54,14 +54,16 @@ import kotlinx.coroutines.delay
 @Composable
 internal fun FolderPanel(
     folder: FolderEntry, apps: Map<String, AppEntry>, drag: HomeDragState, page: Int,
-    homeDestinations: List<Int>, dockVacancies: List<Int>, onDismiss: () -> Unit,
+    onDismiss: () -> Unit,
     onRename: (String) -> Unit, onLaunch: (AppEntry, android.graphics.Rect?) -> Unit,
-    onMoveOut: (String, DropTarget) -> Unit,
+    onAppMenu: (AppEntry, androidx.compose.ui.geometry.Rect) -> Unit,
     color: Long? = null, onColor: (Long?) -> Unit = {},
     onAppsChange: (List<String>) -> Unit = {},
     editing: Boolean = false,
+    contextMenuOpen: Boolean = false,
 ) {
     if (!rememberHomePopupVisible(onDismiss = onDismiss)) return
+    PopupBackdropContent {
     var title by rememberSaveable(folder.id) { mutableStateOf(folder.title) }
     var showAppPicker by rememberSaveable(folder.id) { mutableStateOf(false) }
     // Zoom in from the folder's tile on Home and back into it on close, like iPhone folders.
@@ -76,7 +78,7 @@ internal fun FolderPanel(
     val tile = remember(folder.id) { IconBounds.of(folder.id) }
     var panelBounds by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
     // Predictive back: the folder shrinks toward its icon as you swipe, and closes (or springs back) when you let go.
-    PredictiveBack(enabled = !closing && !showAppPicker, onProgress = { p -> scope.launch { appear.snapTo(1f - .35f * p) } },
+    PredictiveBack(enabled = !closing && !showAppPicker && !contextMenuOpen, onProgress = { p -> scope.launch { appear.snapTo(1f - .35f * p) } },
         onCancel = { scope.launch { appear.animateTo(1f, FolioMotion.spring(FolioMotion.Quick)) } }, onBack = close)
     DisposableEffect(folder.id, editing) {
         onDispose { if (editing && title.isNotBlank() && title != folder.title) onRename(title) }
@@ -93,13 +95,14 @@ internal fun FolderPanel(
     }
     LaunchedEffect(folder.id) { appear.animateTo(1f, MotionSpeed.spring(.78f, androidx.compose.animation.core.Spring.StiffnessMediumLow)) }
     val folderLook = LocalFolderLook.current
+    val scrimAlpha = LocalBackgroundMaterial.current.scrimAlpha
     var scrimOrigin by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
     BoxWithConstraints(Modifier.fillMaxSize()
         .onGloballyPositioned { scrimOrigin = it.positionInRoot() }
         // Draw outside Home's safe-area padding, before the content's alpha layer can clip the scrim.
         .drawBehind {
             val bounds = drag.rootBounds
-            drawRect(Color.Black.copy(alpha = folderLook.backdropOpacity * appear.value.coerceIn(0f, 1f)),
+            drawRect(Color.Black.copy(alpha = scrimAlpha * appear.value.coerceIn(0f, 1f)),
                 topLeft = if (bounds.isEmpty) androidx.compose.ui.geometry.Offset.Zero else bounds.topLeft - scrimOrigin,
                 size = if (bounds.isEmpty) size else bounds.size)
         }
@@ -123,11 +126,13 @@ internal fun FolderPanel(
             else ((contentWidth + columnGap) / (84.dp + columnGap)).toInt().coerceIn(1, maxColumns)
         val cellWidth = 84.dp.coerceAtMost((contentWidth - columnGap * (columns - 1)) / columns)
         val panelWidth = cellWidth * columns + columnGap * (columns - 1) + panelPadding * 2
+        val colorControlsWidth = (40.dp * (FolderSwatches.size + 1) + FolioSpace.SMALL.dp * 2)
+            .coerceAtMost(availableWidth)
         val labelHeight = with(density) { MaterialTheme.typography.labelMedium.lineHeight.toDp() * 2 }
         val profileHeight = if (folder.appIds.any { apps[it]?.let { app -> app.isWork || !app.available } == true })
             with(density) { MaterialTheme.typography.labelSmall.lineHeight.toDp() } else 0.dp
         val rowHeight = 58.dp + FolioSpace.SNUG.dp + FolioSpace.COMPACT.dp * 2 + labelHeight + profileHeight
-        val headerHeight = with(density) { 36.sp.toDp() } + 18.dp +
+        val headerHeight = with(density) { 36.sp.toDp() } + 18.dp + FolioSpace.SMALL.dp * 2 +
             if (editing) FolioTouch.MIN.dp + FolioSpace.COMFY.dp else 0.dp
         val availableHeight = maxHeight - headerHeight - panelPadding * 2 - FolioTouch.MIN.dp - FolioSpace.LARGE.dp * 2
         val maxRows = ((availableHeight + rowGap) / (rowHeight + rowGap)).toInt().coerceIn(1, 3)
@@ -135,7 +140,8 @@ internal fun FolderPanel(
         val gridHeight = rowHeight * rows + rowGap * (rows - 1)
         val perPage = rows * columns
         val pageCount = ((folder.appIds.size + perPage - 1) / perPage).coerceAtLeast(1)
-        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(panelWidth)
+        Column(horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.width(if (editing) maxOf(panelWidth, colorControlsWidth) else panelWidth)
             .onGloballyPositioned {
                 panelBounds = it.boundsInWindow()
                 drag.folderBounds = it.boundsInRoot()
@@ -150,44 +156,46 @@ internal fun FolderPanel(
                     alpha = (p * 1.8f).coerceIn(0f, 1f)
                 } else { val s = .86f + .14f * p; scaleX = s; scaleY = s }
             }) {
-        val titleModifier = Modifier.widthIn(max = 420.dp).padding(bottom = 18.dp).testTag("folder-name")
-        val titleStyle = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 30.sp,
-            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-        if (editing) androidx.compose.foundation.text.BasicTextField(title, { title = it },
-            titleModifier, singleLine = true, textStyle = titleStyle,
-            cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.White),
-            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done),
-            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { if (title.isNotBlank()) onRename(title) }))
-        else Text(folder.title, modifier = titleModifier, style = titleStyle)
+        Box(Modifier.width(panelWidth).padding(bottom = 18.dp)
+            .materialBackground(RoundedCornerShape(FolioRadius.GROUPED_CARD.dp), tint = color?.let { Color(it) } ?: FolioGlass.panel)
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
+            .padding(horizontal = panelPadding, vertical = FolioSpace.SMALL.dp)) {
+            val titleModifier = Modifier.fillMaxWidth().testTag("folder-name")
+            val titleStyle = androidx.compose.ui.text.TextStyle(color = FolioGlass.ink, fontSize = 30.sp,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            if (editing) androidx.compose.foundation.text.BasicTextField(title, { title = it },
+                titleModifier, singleLine = true, textStyle = titleStyle,
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(FolioGlass.ink),
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { if (title.isNotBlank()) onRename(title) }))
+            else Text(folder.title, modifier = titleModifier, style = titleStyle)
+        }
         // Folder tint: none + a few iOS-like colors.
-        if (editing) Row(Modifier.fillMaxWidth().padding(bottom = FolioSpace.COMFY.dp)
-            .horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.Center) {
+        if (editing) Row(Modifier.width(colorControlsWidth).padding(bottom = FolioSpace.COMFY.dp)
+            .materialBackground(RoundedCornerShape(FolioRadius.GROUPED_CARD.dp), tint = FolioGlass.panel)
+            .horizontalScroll(rememberScrollState()).padding(horizontal = FolioSpace.SMALL.dp),
+            horizontalArrangement = Arrangement.Center) {
             (listOf<Long?>(null) + FolderSwatches).forEach { swatch ->
                 val selected = swatch == color
-                // The swatch still draws at 30 dp with a 10 dp gap; the tap is 40 x 48, made of the circle and the
-                // gap around it. Eight 48 dp-wide targets would not fit a cover screen's folder panel (A11Y-1).
+                // Keep the color controls independent of the app grid's column count.
                 Box(Modifier.width(40.dp).height(FolioTouch.MIN.dp)
                     .clickable(onClickLabel = if (swatch == null) "No folder color" else "Folder color") { onColor(swatch) },
                     contentAlignment = Alignment.Center) {
                     Box(Modifier.size(30.dp).clip(androidx.compose.foundation.shape.CircleShape)
-                        .background(swatch?.let { Color(it) } ?: Color.White.copy(alpha = .18f))
-                        .then(if (selected) Modifier.border(2.5.dp, Color.White, androidx.compose.foundation.shape.CircleShape) else Modifier))
+                        .background(swatch?.let { Color(it) } ?: FolioGlass.ink.copy(alpha = .18f))
+                        .then(if (selected) Modifier.border(2.5.dp, FolioGlass.ink, androidx.compose.foundation.shape.CircleShape) else Modifier))
                 }
             }
         }
-        Surface(Modifier.fillMaxWidth()
+        Surface(Modifier.width(panelWidth)
+            .materialBackground(RoundedCornerShape(FolioRadius.PANEL.dp), tint = color?.let { Color(it) } ?: FolioGlass.panel)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
                 onClick = {},
             )
             .testTag("folder-panel-content"),
-            color = when (folderLook.background) {
-                FolderBackground.GLASS -> FolioGlass.card
-                FolderBackground.SOLID -> FolioColors.SecondaryBackground
-                FolderBackground.CLEAR -> Color.Transparent
-            }, contentColor = Color.White, shape = RoundedCornerShape(38.dp),
-            border = if (folderLook.background == FolderBackground.CLEAR) null else FolioGlass.edge) {
+            color = Color.Transparent, contentColor = FolioGlass.ink, shape = RoundedCornerShape(FolioRadius.PANEL.dp)) {
             Column(Modifier.padding(panelPadding)) {
                 val reorderTarget = if (drag.reorderingFolder && drag.moved)
                     drag.destination(drag.pointer, setOf(page))?.appId else null
@@ -238,8 +246,8 @@ internal fun FolderPanel(
                                 horizontalArrangement = Arrangement.spacedBy(columnGap), verticalArrangement = Arrangement.spacedBy(rowGap)) {
                                 items(previewAppIds.drop(folderPage * perPage).take(perPage), key = { it }) { appId ->
                                     Box(Modifier.animateItem().height(rowHeight)) {
-                                        apps[appId]?.let { app -> FolderChild(app, folder.id, drag, page, homeDestinations, dockVacancies,
-                                            onLaunch = onLaunch, onMoveOut = onMoveOut,
+                                        apps[appId]?.let { app -> FolderChild(app, folder.id, drag, page,
+                                            onLaunch = onLaunch, onAppMenu = onAppMenu,
                                             highlighted = drag.reorderingFolder && drag.moved && drag.source?.appId == appId) }
                                     }
                                 }
@@ -253,17 +261,17 @@ internal fun FolderPanel(
                                 Box(Modifier.size(32.dp).selectable(selected = folderPager.currentPage == index, enabled = !drag.active,
                                     role = Role.Tab, onClick = { scope.launch { folderPager.animateScrollToPage(index) } })
                                     .semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
-                                    Box(Modifier.size(6.dp).background(Color.White.copy(alpha = if (folderPager.currentPage == index) 1f else .35f),
+                                    Box(Modifier.size(6.dp).background(FolioGlass.ink.copy(alpha = if (folderPager.currentPage == index) 1f else .35f),
                                         androidx.compose.foundation.shape.CircleShape))
                                 }
                             }
                         } else Spacer(Modifier.weight(1f))
                         IconButton(onClick = { showAppPicker = true }, modifier = Modifier.testTag("folder-add-apps")) {
                             Box(Modifier.size(30.dp).clip(androidx.compose.foundation.shape.CircleShape)
-                                .background(Color.White.copy(alpha = .18f))
-                                .border(1.5.dp, Color.White.copy(alpha = .8f), androidx.compose.foundation.shape.CircleShape),
+                                .background(FolioGlass.ink.copy(alpha = .18f))
+                                .border(1.5.dp, FolioGlass.ink.copy(alpha = .8f), androidx.compose.foundation.shape.CircleShape),
                                 contentAlignment = Alignment.Center) {
-                                Icon(Icons.Rounded.Add, stringResource(R.string.folder_select_apps), Modifier.size(22.dp), tint = Color.White)
+                                Icon(Icons.Rounded.Add, stringResource(R.string.folder_select_apps), Modifier.size(22.dp), tint = FolioGlass.ink)
                             }
                         }
                         }
@@ -276,54 +284,40 @@ internal fun FolderPanel(
     if (showAppPicker) FolderAppPicker(folder, apps.values.toList(),
         onDismiss = { showAppPicker = false },
         onConfirm = { selected -> onAppsChange(selected); showAppPicker = false })
+    }
 }
 
 @Composable
 private fun FolderChild(
     app: AppEntry, folderId: String, drag: HomeDragState, page: Int,
-    homeDestinations: List<Int>, dockVacancies: List<Int>,
-    onLaunch: (AppEntry, android.graphics.Rect?) -> Unit, onMoveOut: (String, DropTarget) -> Unit,
+    onLaunch: (AppEntry, android.graphics.Rect?) -> Unit,
+    onAppMenu: (AppEntry, androidx.compose.ui.geometry.Rect) -> Unit,
     highlighted: Boolean,
 ) {
     val menu = drag.folderMenuAppId == app.id && !drag.moved
     val menuLabel = stringResource(R.string.move_1_s, app.label)
+    var iconBounds by remember(app.id) { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
+    LaunchedEffect(menu, iconBounds) {
+        if (menu && !iconBounds.isEmpty) {
+            drag.folderMenuAppId = null
+            onAppMenu(app, iconBounds)
+        }
+    }
     Surface(Modifier.fillMaxWidth().testTag("folder-child-${app.id}")
         .graphicsLayer { alpha = if (drag.moved && drag.source?.appId == app.id) .25f else 1f },
-        color = if (highlighted) Color.White.copy(alpha = .18f) else Color.Transparent, contentColor = Color.White,
+        color = if (highlighted) FolioGlass.ink.copy(alpha = .18f) else Color.Transparent, contentColor = FolioGlass.ink,
         shape = RoundedCornerShape(18.dp)) {
         Box {
             Column(Modifier.fillMaxWidth().dropRegion(drag, DropTarget.Library(app.id), app.id, page,
                 folderId = folderId, scope = folderId).clickable(enabled = app.available) { onLaunch(app, null) }
                 .semantics { onLongClick(label = menuLabel) { drag.folderMenuAppId = app.id; true } }
                 .padding(horizontal = FolioSpace.SNUG.dp, vertical = FolioSpace.COMPACT.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                AppIcon(app, null, Modifier.size(58.dp), shape = RoundedCornerShape(FolioRadius.CARD.dp))
+                AppIcon(app, null, Modifier.size(58.dp).onGloballyPositioned { iconBounds = it.boundsInRoot() },
+                    shape = RoundedCornerShape(FolioRadius.CARD.dp))
                 Text(app.label, Modifier.padding(top = FolioSpace.SNUG.dp), maxLines = 2, overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.labelMedium)
+                    color = FolioGlass.ink, style = MaterialTheme.typography.labelMedium)
                 if (app.isWork || !app.available) Text(if (app.available) app.profileLabel else "${app.profileLabel} unavailable",
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall)
-            }
-            // Keep the held pointer in Home's drag handler so moving can still take the app out of its folder.
-            FolioMenuPopup(menu, onDismiss = { drag.folderMenuAppId = null }, tag = "folder-options-${app.id}",
-                focusable = !drag.active) {
-                homeDestinations.distinctBy(::homeCellPage).forEachIndexed { index, destination ->
-                    val destinationPage = homeCellPage(destination)
-                    val label = if (destinationPage == -1) stringResource(R.string.move_to_the_unfolded_only_page)
-                        else stringResource(R.string.move_to_page_1_d, destinationPage + 1)
-                    if (index > 0) MenuDivider()
-                    MenuRow(label, tag = "folder-move-${app.id}-page-$destinationPage") {
-                        drag.folderMenuAppId = null; onMoveOut(app.id, DropTarget.Home(destination))
-                    }
-                }
-                dockVacancies.firstOrNull()?.let { dock ->
-                    MenuDivider()
-                    MenuRow(stringResource(R.string.move_to_dock), tag = "folder-move-${app.id}-dock") {
-                        drag.folderMenuAppId = null; onMoveOut(app.id, DropTarget.Dock(dock))
-                    }
-                }
-                MenuDivider()
-                MenuRow(stringResource(R.string.remove_shortcut), destructive = true, tag = "folder-remove-${app.id}") {
-                    drag.folderMenuAppId = null; onMoveOut(app.id, DropTarget.Remove)
-                }
+                    color = FolioGlass.secondaryInk, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall)
             }
         }
     }
@@ -331,23 +325,26 @@ private fun FolderChild(
 
 @Composable
 private fun FolderAppPicker(folder: FolderEntry, apps: List<AppEntry>, onDismiss: () -> Unit, onConfirm: (List<String>) -> Unit) {
+    val ink = FolioGlass.ink
+    val secondaryInk = FolioGlass.secondaryInk
     var selected by rememberSaveable(folder.id) { mutableStateOf(ArrayList(folder.appIds)) }
     var query by rememberSaveable { mutableStateOf("") }
-    val appsById = remember(apps) { apps.associateBy { it.id } }
+    val availableApps = apps.filter { !AppSecurity.isHidden(it) && (!it.isShortcut || !AppSecurity.isProtected(it)) }
+    val appsById = remember(availableApps) { availableApps.associateBy { it.id } }
     val selectedApps = remember(selected, appsById) { selected.mapNotNull(appsById::get) }
-    val shown = remember(apps, query) {
-        apps.filter { it.label.contains(query.trim(), ignoreCase = true) }.sortedBy { it.label.lowercase() }
+    val shown = remember(availableApps, query) {
+        availableApps.filter { matchesAppQuery(it, query.trim()) }.sortedBy { it.label.lowercase() }
     }
     AlertDialog(onDismissRequest = onDismiss,
         modifier = Modifier.padding(horizontal = FolioSpace.LARGE.dp).imePadding(),
-        width = 520.dp, textMaxHeight = 620.dp,
-        title = { Text(stringResource(R.string.folder_select_apps)) },
+        width = 520.dp, textMaxHeight = 620.dp, material = true,
+        title = { Text(stringResource(R.string.folder_select_apps), color = ink) },
         text = {
             Column(Modifier.heightIn(max = 620.dp)) {
-                IosSearchField(query, { query = it }, stringResource(R.string.search_apps), Modifier.padding(bottom = FolioSpace.SMALL.dp))
-                Text(stringResource(R.string.folder_selected_order), style = MaterialTheme.typography.labelMedium)
+                IosSearchField(query, { query = it }, stringResource(R.string.search_apps), Modifier.padding(bottom = FolioSpace.SMALL.dp), ink = ink, material = true)
+                Text(stringResource(R.string.folder_selected_order), color = ink, style = MaterialTheme.typography.labelMedium)
                 if (selectedApps.isEmpty()) Text(stringResource(R.string.folder_no_selected_apps),
-                    Modifier.padding(vertical = FolioSpace.SMALL.dp), style = MaterialTheme.typography.bodySmall)
+                    Modifier.padding(vertical = FolioSpace.SMALL.dp), color = secondaryInk, style = MaterialTheme.typography.bodySmall)
                 else LazyRow(Modifier.fillMaxWidth().padding(vertical = FolioSpace.TINY.dp).testTag("folder-selection-order"),
                     horizontalArrangement = Arrangement.spacedBy(FolioSpace.TINY.dp)) {
                     itemsIndexed(selectedApps, key = { _, app -> app.id }) { index, app ->
@@ -355,13 +352,13 @@ private fun FolderAppPicker(folder: FolderEntry, apps: List<AppEntry>, onDismiss
                             .toggleable(value = true, role = Role.Checkbox, onValueChange = {
                                 selected = ArrayList(selected - app.id)
                             }), horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("${index + 1}", style = MaterialTheme.typography.labelSmall)
+                            Text("${index + 1}", color = secondaryInk, style = MaterialTheme.typography.labelSmall)
                             AppIcon(app, null, Modifier.size(28.dp), shape = RoundedCornerShape(FolioRadius.CONTROL.dp), badge = false)
-                            Text(app.label, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall)
+                            Text(app.label, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall)
                         }
                     }
                 }
-                HorizontalDivider(Modifier.padding(bottom = FolioSpace.SMALL.dp))
+                HorizontalDivider(Modifier.padding(bottom = FolioSpace.SMALL.dp), color = ink.copy(alpha = .16f))
                 LazyColumn(Modifier.weight(1f, fill = false).testTag("folder-app-picker")) {
                     items(shown, key = { it.id }) { app ->
                         val checked = app.id in selected
@@ -372,16 +369,17 @@ private fun FolderAppPicker(folder: FolderEntry, apps: List<AppEntry>, onDismiss
                             }).padding(vertical = FolioSpace.SNUG.dp), verticalAlignment = Alignment.CenterVertically) {
                             AppIcon(app, null, Modifier.size(40.dp), shape = RoundedCornerShape(FolioRadius.CONTROL.dp), badge = false)
                             Column(Modifier.weight(1f).padding(horizontal = FolioSpace.SMALL.dp)) {
-                                Text(app.label)
-                                if (app.isWork) Text(app.profileLabel, style = MaterialTheme.typography.labelSmall)
+                                Text(app.label, color = ink)
+                                if (app.isWork) Text(app.profileLabel, color = secondaryInk, style = MaterialTheme.typography.labelSmall)
                             }
-                            Checkbox(checked = checked, onCheckedChange = null)
+                            Checkbox(checked = checked, onCheckedChange = null,
+                                colors = CheckboxDefaults.colors(uncheckedColor = ink.copy(alpha = .45f)))
                         }
                     }
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { onConfirm(selected.toList()) }, modifier = Modifier.testTag("folder-app-picker-confirm")) {
+        confirmButton = { TextButton(onClick = { onConfirm(selected.filter { it in appsById }) }, modifier = Modifier.testTag("folder-app-picker-confirm")) {
             Text(stringResource(R.string.folder_confirm_apps))
         } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } })

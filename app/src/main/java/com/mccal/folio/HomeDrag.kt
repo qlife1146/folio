@@ -26,6 +26,27 @@ internal data class DragRegion(val target: DropTarget, val bounds: Rect, val app
     }
 }
 
+internal const val SPOTLIGHT_DRAG_SCOPE = "spotlight"
+
+internal data class HomeDragInputConfig(
+    val enabled: Boolean, val page: Int, val eligiblePages: Set<Int>, val immediate: Boolean,
+    val sourceOverride: DragRegion?, val sourceScope: String?,
+    val onStart: () -> Unit, val onFinish: (Boolean) -> Unit, val onMoveStart: () -> Unit,
+)
+
+/** The window owns the gesture; Home supplies its latest placement callbacks. */
+@Stable
+internal class HomeDragHost {
+    val drag = HomeDragState()
+    var input: HomeDragInputConfig? = null
+    var onAppMenu: (AppEntry) -> Unit = {}
+    var spotlightMenuOpen by mutableStateOf(false)
+    var spotlightMenuContent: (@Composable () -> Unit)? = null
+}
+
+internal data class HomeHoverIntent(val target: DropTarget, val direction: HomePushDirection?,
+    val folder: DropTarget.Home?)
+
 @Stable
 internal class HomeDragState {
     val regions = mutableStateMapOf<DropTarget, DragRegion>()
@@ -37,6 +58,7 @@ internal class HomeDragState {
     val rootOrigin get() = rootBounds.topLeft
     var originPage = 0
     var moved by mutableStateOf(false)
+    var folderPreviewTarget by mutableStateOf<DropTarget.Home?>(null)
     var activeSourceScope by mutableStateOf<String?>(null)
     var folderMenuAppId by mutableStateOf<String?>(null)
     var folderBounds by mutableStateOf<Rect?>(null)
@@ -44,9 +66,9 @@ internal class HomeDragState {
     var folderDragRegions by mutableStateOf<List<DragRegion>>(emptyList())
     val reorderingFolder get() = source?.folderId != null && !folderExited
     val active get() = source != null
-    fun hit(point: Offset, pages: Set<Int>) = regions.values
+    fun hit(point: Offset, pages: Set<Int>, scope: String? = activeSourceScope) = regions.values
         .filter { (it.page == null || it.page in pages) && it.bounds.contains(point) &&
-            (source != null || it.target !is DropTarget.Folder) && it.scope == activeSourceScope }
+            (source != null || it.target !is DropTarget.Folder) && it.scope == scope }
         .maxByOrNull(::dragRegionPriority)
     fun destination(point: Offset, pages: Set<Int>): DragRegion? {
         if (reorderingFolder) {
@@ -87,7 +109,23 @@ internal class HomeDragState {
             }
         }.maxByOrNull(::dragRegionPriority)
     }
-    fun clear() { source = null; moved = false; folderExited = false; folderDragRegions = emptyList() }
+    fun clear() { source = null; moved = false; folderPreviewTarget = null; folderExited = false; folderDragRegions = emptyList() }
+
+    /** The approached edge determines which way the cell's occupant yields. */
+    fun pushDirection(point: Offset, pages: Set<Int>): HomePushDirection? {
+        val cell = destination(point, pages)?.takeIf { it.target is DropTarget.Home } ?: return null
+        val bounds = cell.bounds
+        if (bounds.width <= 0f || bounds.height <= 0f) return null
+        val x = (point.x - bounds.center.x) / bounds.width
+        val y = (point.y - bounds.center.y) / bounds.height
+        // At the exact center use the approach vector, where neither edge is nearer.
+        val delta = if (kotlin.math.abs(x) + kotlin.math.abs(y) < .05f)
+            Offset((point.x - origin.x) / bounds.width, (point.y - origin.y) / bounds.height)
+        else Offset(-x, -y)
+        return if (kotlin.math.abs(delta.x) > kotlin.math.abs(delta.y)) {
+            if (delta.x < 0f) HomePushDirection.LEFT else HomePushDirection.RIGHT
+        } else if (delta.y < 0f) HomePushDirection.UP else HomePushDirection.DOWN
+    }
 
     /** Overlapping an icon makes a folder; the space between icons previews a reorder. */
     fun folderCreationTarget(point: Offset, pages: Set<Int>, layout: HomeLayout): DropTarget.Home? {
@@ -97,7 +135,9 @@ internal class HomeDragState {
         val target = region.target as? DropTarget.Home ?: return null
         val other = layout.slotAt(target.index) ?: return null
         if (other == from.appId || isReservedFolderId(other)) return null
-        return target.takeIf { region.containsIcon(point) }
+        val iconSize = region.iconSizePx?.coerceAtMost(minOf(region.bounds.width, region.bounds.height)) ?: return null
+        // The icon touches the cell's top: leave that edge for downward insertion instead of folder creation.
+        return target.takeIf { region.containsIcon(point) && point.y >= region.bounds.top + iconSize * .25f }
     }
 
     fun register(owner: Any, region: DragRegion) {
@@ -176,7 +216,7 @@ internal fun adjustedWidgetDropIndex(
  * Initial pass and arbitrates intent from geometry instead: jitter keeps waiting, while a real
  * move, release/cancel, or second pointer yields the stream to the provider.
  */
-private suspend fun AwaitPointerEventScope.awaitWidgetLongPressOrCancellation(
+internal suspend fun AwaitPointerEventScope.awaitWidgetLongPressOrCancellation(
     down: PointerInputChange,
 ): PointerInputChange? {
     var current = down
@@ -202,29 +242,41 @@ internal fun Modifier.homeDragInput(
     /** Jiggle mode: moving a finger past touch slop picks the item up without a long-press. */
     immediate: Boolean = false,
     onMoveStart: () -> Unit = {},
+    /** While a menu is open, only its lifted icon can initiate another drag. */
+    sourceOverride: DragRegion? = null,
 ): Modifier {
-    val currentImmediate by rememberUpdatedState(immediate)
-    val currentEnabled by rememberUpdatedState(enabled)
-    val currentPage by rememberUpdatedState(page)
-    val currentEligiblePages by rememberUpdatedState(eligiblePages)
-    val start by rememberUpdatedState(onStart)
-    val moveStart by rememberUpdatedState(onMoveStart)
-    val finish by rememberUpdatedState(onFinish)
+    val configuration by rememberUpdatedState(HomeDragInputConfig(enabled, page, eligiblePages, immediate,
+        sourceOverride, null, onStart, onFinish, onMoveStart))
+    return homeDragInput(drag) { configuration }
+}
+
+@Composable
+internal fun Modifier.homeDragInput(drag: HomeDragState, input: () -> HomeDragInputConfig?): Modifier {
+    val currentInput by rememberUpdatedState(input)
     return onGloballyPositioned { drag.rootBounds = it.boundsInRoot() }.pointerInput(drag) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
-            if (!currentEnabled) return@awaitEachGesture
+            val configuration = currentInput()?.takeIf { it.enabled } ?: return@awaitEachGesture
             val point = down.position + drag.rootOrigin
-            val region = drag.hit(point, currentEligiblePages)?.takeIf { it.movable } ?: return@awaitEachGesture
+            val menuSource = configuration.sourceOverride
+            val region = (menuSource?.takeIf { it.bounds.contains(point) }
+                ?: if (menuSource == null) drag.hit(point, configuration.eligiblePages, configuration.sourceScope ?: drag.activeSourceScope) else null)
+                ?.takeIf { it.movable } ?: return@awaitEachGesture
+            val app = region.appId?.let { !isReservedFolderId(it) } == true && region.folderId == null
             var movedAlready = false
-            if (currentImmediate) {
-                val result = awaitSlopOrLongPress(down) ?: return@awaitEachGesture
+            if (configuration.immediate) {
+                val result = awaitSlopOrLongPress(down,
+                    if (app) APP_MENU_HOLD_MILLIS else viewConfiguration.longPressTimeoutMillis) ?: return@awaitEachGesture
                 movedAlready = result
+            } else if (app) {
+                awaitAppMenuHoldOrCancellation(down) ?: return@awaitEachGesture
             } else if (region.target is DropTarget.Widget && (region.widgetId ?: EMPTY_WIDGET) >= 0) {
                 awaitWidgetLongPressOrCancellation(down) ?: return@awaitEachGesture
             } else {
                 awaitLongPressOrCancellation(down.id) ?: return@awaitEachGesture
             }
+            // Claim the pointer before the menu changes hit testing; retain it until release.
+            currentEvent.changes.forEach { it.consume() }
             drag.source = region
             drag.folderExited = false
             drag.folderDragRegions = if (region.folderId != null) drag.regions.values.filter {
@@ -232,30 +284,30 @@ internal fun Modifier.homeDragInput(
             } else emptyList()
             drag.pointer = point
             drag.origin = point
-            drag.originPage = currentPage
+            drag.originPage = currentInput()?.page ?: configuration.page
             drag.moved = movedAlready
-            start()
-            if (movedAlready) moveStart()
+            currentInput()?.onStart?.invoke()
+            if (movedAlready) currentInput()?.onMoveStart?.invoke()
             try {
                 while (true) {
                     val event = awaitPointerEvent(PointerEventPass.Initial)
                     val change = event.changes.firstOrNull { it.id == down.id }
                     if (change == null || event.changes.any { it.id != down.id && it.pressed }) {
                         event.changes.forEach { it.consume() }
-                        finish(true)
+                        currentInput()?.onFinish?.invoke(true)
                         break
                     }
                     drag.pointer = change.position + drag.rootOrigin
                     if (!drag.moved && (drag.pointer - drag.origin).getDistance() > viewConfiguration.touchSlop) {
                         drag.moved = true
-                        moveStart()
+                        currentInput()?.onMoveStart?.invoke()
                     }
                     if (drag.moved && drag.reorderingFolder && drag.folderBounds?.contains(drag.pointer) == false) {
                         drag.folderExited = true
                     }
                     change.consume()
                     if (!change.pressed) {
-                        finish(false)
+                        currentInput()?.onFinish?.invoke(false)
                         break
                     }
                     if (!drag.active) break
@@ -269,9 +321,11 @@ internal fun Modifier.homeDragInput(
 }
 
 /** true once the finger moves past slop, false after a long-press without moving, null on release or cancel. */
-private suspend fun AwaitPointerEventScope.awaitSlopOrLongPress(down: PointerInputChange): Boolean? {
+internal suspend fun AwaitPointerEventScope.awaitSlopOrLongPress(
+    down: PointerInputChange, timeoutMillis: Long = viewConfiguration.longPressTimeoutMillis,
+): Boolean? {
     var result: Boolean? = false
-    val finished = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+    val finished = withTimeoutOrNull(timeoutMillis) {
         while (true) {
             val event = awaitPointerEvent(PointerEventPass.Initial)
             val change = event.changes.firstOrNull { it.id == down.id }
@@ -285,4 +339,23 @@ private suspend fun AwaitPointerEventScope.awaitSlopOrLongPress(down: PointerInp
         Unit
     }
     return if (finished == null) false else result
+}
+
+private const val APP_MENU_HOLD_MILLIS = 500L
+
+/** The same half-second hold for Home, Dock, App Library and Spotlight. */
+private suspend fun AwaitPointerEventScope.awaitAppMenuHoldOrCancellation(down: PointerInputChange): PointerInputChange? {
+    var current = down
+    var canceled = false
+    withTimeoutOrNull(APP_MENU_HOLD_MILLIS) {
+        while (!canceled) {
+            val event = awaitPointerEvent(PointerEventPass.Main)
+            val change = event.changes.firstOrNull { it.id == down.id }
+            canceled = change == null || !change.pressed || change.isConsumed ||
+                event.changes.any { it.id != down.id && it.pressed } ||
+                (change.position - down.position).getDistance() > viewConfiguration.touchSlop
+            if (!canceled) current = change!!
+        }
+    }
+    return current.takeUnless { canceled }
 }

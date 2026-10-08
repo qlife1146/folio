@@ -36,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -64,7 +65,8 @@ private const val MICRO_SIDE = 18f
  */
 @Composable
 internal fun MicroHome(apps: List<AppEntry>, status: DeviceStatus, width: Dp, height: Dp,
-    onLaunch: (AppEntry) -> Unit, onNotifications: () -> Unit, onSearch: () -> Unit, onSettings: () -> Unit) {
+    onLaunch: (AppEntry) -> Unit, onNotifications: () -> Unit, onSearch: () -> Unit, onSettings: () -> Unit,
+    dockHideProgress: () -> Float = { 0f }) {
     val context = LocalContext.current
     // The shared minute tick rather than a loop of its own (DYN-14).
     val now by rememberMinuteTick()
@@ -89,14 +91,18 @@ internal fun MicroHome(apps: List<AppEntry>, status: DeviceStatus, width: Dp, he
                 maxLines = 1, softWrap = false, modifier = Modifier.semantics { heading() })
             Text(date, color = Color.White.copy(alpha = .75f), fontSize = FolioType.FOOTNOTE.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        if (shown.isNotEmpty()) Row(horizontalArrangement = Arrangement.spacedBy(MICRO_GAP.dp)) {
+        if (shown.isNotEmpty()) Row(Modifier.graphicsLayer {
+            val progress = dockHideProgress().coerceIn(0f, 1f)
+            alpha = 1f - progress
+            translationX = ((width.toPx() + size.width) / 2) * progress
+        }, horizontalArrangement = Arrangement.spacedBy(MICRO_GAP.dp)) {
             shown.forEach { app ->
                 Box(Modifier.size(MICRO_ICON.dp).clickable(onClickLabel = "Open ${app.label}") { onLaunch(app) }) {
                     AppIcon(app, app.label, Modifier.size(MICRO_ICON.dp), shape = RoundedCornerShape(12.dp))
                 }
             }
         }
-        media?.let { MicroNowPlaying(it) }
+        Box(Modifier.fillMaxWidth().height(48.dp)) { media?.let { MicroNowPlaying(it) } }
         if (roomy) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             MicroChip(if (notifications == 1) "1 notification" else "$notifications notifications", null, onNotifications)
             MicroChip("Search", Icons.Rounded.Search, onSearch)
@@ -106,10 +112,12 @@ internal fun MicroHome(apps: List<AppEntry>, status: DeviceStatus, width: Dp, he
 
 @Composable
 private fun MicroNowPlaying(media: IslandActivity.Media) {
+    if (AppSecurity.isProtected(media.packageName)) return
+    val context = androidx.compose.ui.platform.LocalContext.current
     val controls = runCatching { media.controller.transportControls }.getOrNull()
     val open = runCatching { media.controller.sessionActivity }.getOrNull()
     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(FolioRadius.PANEL.dp)).background(Color.White.copy(alpha = .14f))
-        .clickable(enabled = open != null, onClickLabel = "Open ${media.title}") { runCatching { open?.send() } }
+        .clickable(enabled = open != null, onClickLabel = "Open ${media.title}") { IslandListenerService.open(context, media) }
         .padding(start = FolioSpace.SMALL.dp, end = FolioSpace.TINY.dp), verticalAlignment = Alignment.CenterVertically) {
         val art = media.art ?: media.icon
         if (art != null) Image(art.asImageBitmap(), null, Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)

@@ -234,7 +234,8 @@ internal fun <T> List<T>.slicePage(range: IntRange): List<T> =
 internal fun FolderTile(folder: FolderEntry, apps: Map<String, AppEntry>, size: Float, labels: Boolean,
     drag: HomeDragState, page: Int, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val counts0 = LocalBadgeCounts.current
-    val unread = folder.appIds.mapNotNull { apps[it]?.packageName }.distinct().sumOf { counts0[it] ?: 0 }
+    val profileCounts = LocalProfileBadgeCounts.current
+    val unread = folder.appIds.mapNotNull { apps[it] }.distinctBy(AppSecurity::key).sumOf { appBadgeCount(it, counts0, profileCounts) }
     val folderApps = pluralStringResource(R.plurals.folder_apps, folder.appIds.size, folder.title, folder.appIds.size)
     val folderLabel = if (unread > 0) pluralStringResource(R.plurals.folder_unread, unread, folderApps, unread) else folderApps
     Column(modifier.clickable(onClick = onClick).semantics(mergeDescendants = true) {
@@ -248,30 +249,32 @@ internal fun FolderTile(folder: FolderEntry, apps: Map<String, AppEntry>, size: 
             .jiggle(folder.id)) {
             // Like iOS: a folder's badge is the total of its apps' badges (each app counted once).
             val look = LocalIconLook.current
-            val counts = LocalBadgeCounts.current
-            val total = if (look.badges == BadgeStyle.OFF) 0
-                else folder.appIds.mapNotNull { apps[it]?.packageName }.distinct().sumOf { counts[it] ?: 0 }
+            val total = if (look.badges == BadgeStyle.OFF) 0 else unread
             Box(Modifier.fillMaxSize().clip(RoundedCornerShape((size * .24f).dp))
-                .background(tint?.copy(alpha = .78f) ?: Glass.copy(alpha = .72f)).border(1.dp, Color.White.copy(alpha = .55f), RoundedCornerShape((size * .24f).dp))
+                .materialBackground(RoundedCornerShape((size * .24f).dp), tint = tint ?: FolioGlass.panel)
                 .testTag("folder-drop-${folder.id}")) {
-            folder.appIds.take(4).forEachIndexed { index, id ->
+            val miniSize = (size * .24f).dp
+            val miniPitch = (size * .28f).dp
+            val miniInset = (size * .1f).dp
+            folder.appIds.take(9).forEachIndexed { index, id ->
                 apps[id]?.let { app ->
-                    AppIcon(app, null, Modifier.align(when (index) {
-                        0 -> Alignment.TopStart; 1 -> Alignment.TopEnd; 2 -> Alignment.BottomStart; else -> Alignment.BottomEnd
-                    }).padding(5.dp).size((size * .38f).dp).clip(RoundedCornerShape(6.dp)))
+                    AppIcon(app, null, Modifier.offset(
+                        x = miniInset + miniPitch * (index % 3),
+                        y = miniInset + miniPitch * (index / 3),
+                    ).size(miniSize).clip(RoundedCornerShape(miniSize * .24f)))
                 }
             }
             }
             if (total > 0) IconBadge(total, look.badges, look.badgeColor.fixed?.let { Color(it) } ?: BadgeRed, look.badgeLook, look.badgeSize.scale)
         }
-        if (labels) Text(folder.title, color = LocalHomeInk.current.primary, fontSize = LocalLabelSize.current.sp.sp, maxLines = 1,
+        if (labels) Text(folder.title, color = FolioGlass.ink, fontSize = LocalLabelSize.current.sp.sp, maxLines = 1,
             overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = FolioSpace.TINY.dp))
     }
 }
 
 @Composable
 internal fun AppTile(app: AppEntry, size: Float, labels: Boolean, modifier: Modifier = Modifier, onClick: (android.graphics.Rect) -> Unit, onLongClick: () -> Unit,
-    onRemove: (() -> Unit)? = null) {
+    onRemove: (() -> Unit)? = null, folderPreviewApp: AppEntry? = null) {
     val appOptionsLabel = stringResource(R.string.app_options)
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
@@ -290,10 +293,28 @@ internal fun AppTile(app: AppEntry, size: Float, labels: Boolean, modifier: Modi
         // Bounds are read outside the wiggle layer so jiggling doesn't report a new position every frame.
         Box(Modifier.size(iconSize).onGloballyPositioned { bounds.set(it.boundsInWindow().toAndroidBounds()); IconBounds.update(app.id, bounds) }
             .jiggle(app.id)) {
-            if (app.id in LocalStackedApps.current) StackPeek(iconSize)
-            AppIcon(app, null, Modifier.fillMaxSize()
-                .graphicsLayer { scaleX = scale; scaleY = scale; alpha = if (pressed) .82f else 1f }, shape = RoundedCornerShape((size * .24f).dp))
-            if (onRemove != null) JiggleRemoveButton(stringResource(R.string.remove_from_home_2, app.label), onRemove = onRemove)
+            if (folderPreviewApp != null) {
+                val shape = RoundedCornerShape((size * .24f).dp)
+                Box(Modifier.fillMaxSize().clip(shape).materialBackground(shape, tint = FolioGlass.panel)
+                    .testTag("folder-creation-preview-${app.id}")) {
+                    val miniSize = (size * .24f).dp
+                    val miniPitch = (size * .28f).dp
+                    val miniInset = (size * .1f).dp
+                    listOf(app, folderPreviewApp).forEachIndexed { index, previewApp ->
+                        AppIcon(previewApp, null, Modifier.offset(x = miniInset + miniPitch * index, y = miniInset)
+                            .size(miniSize).clip(RoundedCornerShape(miniSize * .24f)))
+                    }
+                }
+            } else {
+                if (app.id in LocalStackedApps.current) StackPeek(iconSize)
+                AppIcon(app, null, Modifier.fillMaxSize()
+                    .graphicsLayer {
+                        scaleX = scale; scaleY = scale; alpha = if (pressed) .82f else 1f
+                        // Fade the icon and its overflowing badge without a bounds-sized offscreen buffer.
+                        compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.ModulateAlpha
+                    }, shape = RoundedCornerShape((size * .24f).dp))
+                if (onRemove != null) JiggleRemoveButton(stringResource(R.string.remove_from_home_2, app.label), onRemove = onRemove)
+            }
         }
         val ink = LocalHomeInk.current
         if (labels) Row(Modifier.padding(top = FolioSpace.TINY.dp), verticalAlignment = Alignment.CenterVertically) {

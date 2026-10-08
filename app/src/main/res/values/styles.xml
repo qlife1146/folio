@@ -10,6 +10,7 @@
     <!-- Launcher-standard wallpaper theme: the system wallpaper shows through a translucent window. -->
     <style name="Theme.Duo.Wallpaper" parent="Theme.Duo">
         <item name="android:windowShowWallpaper">true</item>
+        <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:colorBackgroundCacheHint">@null</item>
     </style>

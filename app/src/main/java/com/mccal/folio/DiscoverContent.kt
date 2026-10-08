@@ -17,6 +17,7 @@ import kotlinx.coroutines.delay
 internal fun DiscoverContent(modifier: Modifier = Modifier) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val message = LiveDiscover.message.value
+    val protected = AppSecurity.isProtected(DiscoverClient.GOOGLE_PACKAGE, android.os.Process.myUserHandle())
     val googleIntent = remember(message) {
         context.packageManager.getLaunchIntentForPackage(DiscoverClient.GOOGLE_PACKAGE)
     }
@@ -28,18 +29,18 @@ internal fun DiscoverContent(modifier: Modifier = Modifier) {
     Box(modifier.testTag("discover-page")) {
         // The healthy native feed moves above this page. Keep its backing page transparent
         // so the retained Home layer is revealed during entry and exit, not an empty glass card.
-        if (showMessage && message != null) Surface(Modifier.fillMaxSize().testTag("discover-recovery-surface"),
+        if (protected || (showMessage && message != null)) Surface(Modifier.fillMaxSize().testTag("discover-recovery-surface"),
             shape = RoundedCornerShape(30.dp), color = Glass.copy(alpha = .92f),
             border = BorderStroke(1.dp, Color.White.copy(alpha = .5f))) {
             Column(Modifier.fillMaxSize().padding(FolioSpace.HUGE.dp),
                 verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(stringResource(R.string.discover), style = MaterialTheme.typography.headlineMedium)
                 Spacer(Modifier.height(16.dp))
-                Text(message ?: "", style = MaterialTheme.typography.bodyMedium)
+                Text(if (protected) stringResource(R.string.security_required) else message ?: "", style = MaterialTheme.typography.bodyMedium)
                 Spacer(Modifier.height(20.dp))
-                FolioButton(stringResource(R.string.retry), LiveDiscover::retry, style = FolioButtonStyle.TONAL, tag = "discover-retry")
-                if (googleIntent != null) TextButton(onClick = {
-                    runCatching { context.startActivity(googleIntent) }
+                if (!protected) FolioButton(stringResource(R.string.retry), LiveDiscover::retry, style = FolioButtonStyle.TONAL, tag = "discover-retry")
+                if (googleIntent != null && !AppSecurity.isHidden(DiscoverClient.GOOGLE_PACKAGE, android.os.Process.myUserHandle())) TextButton(onClick = {
+                    AppSecurity.startActivity(context, googleIntent)
                 }, Modifier.testTag("discover-open-google")) { Text(stringResource(R.string.open_google)) }
                 TextButton(onClick = { LiveDiscover.onHomeRequest?.invoke() },
                     Modifier.testTag("discover-return-home")) { Text(stringResource(R.string.back_to_home_2)) }

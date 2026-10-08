@@ -76,33 +76,6 @@ class ScreenMatrixTest {
     }
 
     /**
-     * The same mistake in the Market, which hangs off the same IME-padded page: the tabs left the sidebar for the
-     * rail, and the list lost the pane beside it, for as long as a keyboard was up over a source's address or the
-     * Settings tab's search field.
-     */
-    @Test fun `the keyboard never changes which Market layout a window gets`() {
-        // Galaxy Z Fold8 inner with a keyboard up: 300 dp of its 704 covered, 404 left to draw in.
-        assertTrue(marketSplits(932f, 404f, keyboardDp = 300f))
-        assertEquals(TabPlacement.SIDEBAR, marketTabs(932f, 404f, keyboardDp = 300f))
-        // Without measuring the keyboard out, the same window reads as a short landscape one and gets the rail.
-        assertFalse(marketSplits(932f, 404f))
-        assertEquals(TabPlacement.RAIL, marketTabs(932f, 404f))
-        // The cover screen in portrait keeps its tab bar: measured on what's left it would read as landscape.
-        assertEquals(TabPlacement.BOTTOM, marketTabs(475f, 451f, keyboardDp = 300f))
-        assertEquals(TabPlacement.RAIL, marketTabs(475f, 451f))
-        // A phone window doesn't gain a sidebar because a keyboard opened, either.
-        assertFalse(marketSplits(411f, 500f, keyboardDp = 391f))
-        assertEquals(TabPlacement.BOTTOM, marketTabs(411f, 500f, keyboardDp = 391f))
-        // Every screen in the matrix, with a keyboard of any usual size over it.
-        for (s in screens) for (keyboard in listOf(0f, 120f, 240f, 360f)) {
-            val left = (s.height - keyboard).coerceAtLeast(0f)
-            val tag = "${s.name} under ${keyboard.toInt()} dp of keyboard"
-            assertEquals(tag, marketSplits(s.width, s.height), marketSplits(s.width, left, keyboardDp = keyboard))
-            assertEquals(tag, marketTabs(s.width, s.height), marketTabs(s.width, left, keyboardDp = keyboard))
-        }
-    }
-
-    /**
      * The keyboard added back has to be what the IME padding actually took, not the whole IME inset. FolioSheet's
      * full-screen page pads its column by navigationBarsPadding() and then by WindowInsets.ime, and windowInsetsPadding
      * subtracts what an earlier one consumed, so the IME padding removes only the part past the navigation bar. Adding
@@ -122,7 +95,6 @@ class ScreenMatrixTest {
 
         assertEquals(withoutKeyboard, sizeClassHeightDp(withKeyboard, took))
         assertEquals(settingsSplits(700f, withoutKeyboard), settingsSplits(700f, withKeyboard, keyboardDp = took))
-        assertEquals(marketTabs(700f, withoutKeyboard), marketTabs(700f, withKeyboard, keyboardDp = took))
 
         // The raw inset over-counts by the navigation bar, and 548 dp is close enough to 560 that it flips the class.
         assertFalse(fitsRegularHomeLayout(700f, withoutKeyboard))

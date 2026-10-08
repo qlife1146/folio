@@ -2,21 +2,24 @@
     xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.BIND_APPWIDGET" tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <!-- Only for Software Update (checking and downloading Folio from GitHub Releases, when you ask). -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+    <uses-permission android:name="android.permission.HIDE_OVERLAY_WINDOWS" />
     <!-- Unlock before listing hidden apps (Settings › Search & App Library). -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
-    <!-- Lets a self-update skip the confirmation once Folio installed the current version itself (Android 12+). -->
-    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
-    <!-- Optional: update notifications (asked for only when turned on in Software Update). -->
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.WRITE_SETTINGS" tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" />
     <queries>
         <package android:name="com.google.android.googlequicksearchbox" />
@@ -26,10 +29,6 @@
         <package android:name="com.openai.chatgpt" />
         <!-- Good Lock's RegiStar, which can take over the side key (mentioned on the Side Key page). -->
         <package android:name="com.samsung.android.app.galaxyregistry" />
-        <!-- Keyd, Folio's own keyboard, listed in the Market as an app of its own. A keyboard has no launcher
-             icon, so the MAIN/LAUNCHER query below never finds one, and Android would keep answering "not
-             installed" even for a copy Folio installed itself. Naming it is the only way to be told. -->
-        <package android:name="com.mccal.keyd" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
@@ -80,6 +79,8 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+        <activity android:name=".AppAuthenticationActivity" android:exported="false"
+            android:theme="@style/Theme.Folio.FoldBridge" android:excludeFromRecents="true" />
         <activity android:name=".FoldBridgeActivity" android:exported="false"
             android:theme="@style/Theme.Folio.FoldBridge"
             android:taskAffinity="com.mccal.folio.foldbridge" android:excludeFromRecents="true"
@@ -102,21 +103,13 @@
         </service>
         <activity android:name=".MainActivity" android:exported="true"
             android:launchMode="singleTask" android:resizeableActivity="true"
+            android:screenOrientation="fullUser"
             android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|density"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.HOME" />
                 <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-            <!-- folio://package/<id> and folio://source/<url>: a shared link opens it in the Market. -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="folio" android:host="package" />
-                <data android:scheme="folio" android:host="source" />
-                <data android:scheme="folio" android:host="early" />
             </intent-filter>
             <!-- Settings › Apps › Default apps › Home app (gear) and App info › Additional settings open Folio's settings. -->
             <intent-filter>
@@ -160,52 +153,8 @@
             </intent-filter>
         </activity-alias>
         <receiver android:name=".FocusScheduleReceiver" android:exported="false" />
-        <receiver android:name=".SoftwareUpdateReceiver" android:exported="false" />
-        <!-- Android's answer when the Market hands it an app to install. Never exported: only the
-             installer session Folio created can reach it. -->
-        <receiver android:name=".MarketInstallReceiver" android:exported="false" />
-        <service android:name=".SoftwareUpdateJob" android:exported="false"
+        <service android:name=".ContentSearchJob" android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE" />
-        <!-- Share a theme file to Folio: it's validated here, then Home asks before applying it. SEND only, so Folio
-             doesn't show up under "Open with" for every JSON file. -->
-        <activity android:name=".ThemeImportActivity" android:exported="true" android:excludeFromRecents="true"
-            android:theme="@style/Theme.Folio.FoldBridge" android:taskAffinity="com.mccal.folio.theme" android:noHistory="true"
-            android:label="@string/label_theme_import">
-            <intent-filter>
-                <action android:name="android.intent.action.SEND" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="application/json" />
-            </intent-filter>
-        </activity>
-        <!-- A .foliopkg file opened or shared with Folio. It's unsigned, so the Market says so before anything runs. -->
-        <activity android:name=".PackageImportActivity" android:exported="true" android:excludeFromRecents="true"
-            android:theme="@style/Theme.Folio.FoldBridge" android:taskAffinity="com.mccal.folio.package"
-            android:noHistory="true" android:label="@string/label_package_import">
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="content" android:mimeType="application/octet-stream" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.SEND" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="application/octet-stream" />
-            </intent-filter>
-        </activity>
-        <service android:name=".MarketRefreshJob" android:exported="false"
-            android:permission="android.permission.BIND_JOB_SERVICE" />
-        <!-- folio://redeem?c=… from a supporter email: the code is checked on the phone, so a bad link is simply refused. -->
-        <activity android:name=".RedeemActivity" android:exported="true" android:excludeFromRecents="true"
-            android:theme="@style/Theme.Folio.FoldBridge" android:taskAffinity="com.mccal.folio.redeem" android:noHistory="true"
-            android:label="@string/label_redeem">
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="folio" android:host="redeem" />
-            </intent-filter>
-        </activity>
         <!-- "Add to Home Screen" for widgets an app asks to pin (only delivered to the default Home app). -->
         <activity android:name=".PinWidgetActivity" android:exported="true" android:excludeFromRecents="true"
             android:theme="@style/Theme.Folio.FoldBridge" android:taskAffinity="com.mccal.folio.pin" android:noHistory="true">
@@ -226,7 +175,7 @@
             android:icon="@drawable/ic_tile_search" android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
         </service>
-        <service android:name=".IslandTileService" android:exported="true" android:label="@string/island"
+        <service android:name=".IslandTileService" android:exported="true" android:label="@string/live_activities"
             android:icon="@drawable/ic_tile_island" android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
             <meta-data android:name="android.service.quicksettings.TOGGLEABLE_TILE" android:value="true" />

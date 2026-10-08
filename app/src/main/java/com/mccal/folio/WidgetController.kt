@@ -12,12 +12,19 @@ import android.os.UserHandle
 import android.os.UserManager
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 enum class WidgetSetupStatus { BINDING, CONFIGURING }
 
@@ -26,7 +33,9 @@ class WidgetController(
     private val model: LauncherModel,
     private val onExternalSetupChanged: (Boolean) -> Unit = {},
 ) {
-    val host: android.appwidget.AppWidgetHost = ZeroPaddingWidgetHost(activity, 1024)
+    internal var providerRevision by mutableIntStateOf(0)
+        private set
+    val host: android.appwidget.AppWidgetHost = ZeroPaddingWidgetHost(activity, 1024) { providerRevision++ }
     val manager = AppWidgetManager.getInstance(activity)
     private val launcherApps = activity.getSystemService(LauncherApps::class.java)
     var failureMessage by mutableStateOf<String?>(null)
@@ -49,17 +58,47 @@ class WidgetController(
         private set
     /** The pending widget goes to the Today View (its placement is only a sizing template). */
     private var pendingTodaySize: TodaySize? = null
+    private var pendingTodayReplaceId: Int? = null
     private val pendingStore = activity.getSharedPreferences("widget_pending", 0)
     private val reconfigureStore = activity.getSharedPreferences("widget_reconfigure_pending", 0)
     private val userManager = activity.getSystemService(UserManager::class.java)
     private var observingModel = false
+    private var lastRetainedIds: Set<Int>? = null
     private val bind = activity.registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val returnedId = result.data?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, pendingId) ?: pendingId
-        if (result.resultCode == Activity.RESULT_OK && returnedId == pendingId) configure() else {
+        if (result.resultCode == Activity.RESULT_OK && returnedId == pendingId) configureProtected() else {
             if (result.resultCode == Activity.RESULT_OK) failureMessage = activity.getString(R.string.the_widget_host_returned_an_unexpected_b)
             cancel()
         }
     }
+
+    fun startListening() {
+        host.startListening()
+        providerRevision++
+    }
+
+    @Composable
+    internal fun rememberInfo(id: Int): AppWidgetProviderInfo? {
+        val revision = providerRevision
+        var info by remember(this, id, revision) { mutableStateOf(providerInfo(id)) }
+        LaunchedEffect(this, id, revision) {
+            if (id < 0 || info != null) return@LaunchedEffect
+            // Package updates and host startup can briefly leave a retained binding unresolved.
+            // Retry that lookup without replacing its ID or losing provider configuration.
+            activity.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                var interval = 500L
+                while (info == null) {
+                    delay(interval)
+                    info = providerInfo(id)
+                    interval = (interval * 2).coerceAtMost(10_000L)
+                }
+            }
+        }
+        return info
+    }
+
+    private fun providerInfo(id: Int): AppWidgetProviderInfo? =
+        if (id >= 0) runCatching { manager.getAppWidgetInfo(id) }.getOrNull() else null
 
     fun restore(bundle: Bundle?) {
         val saved = bundle?.takeIf { it.containsKey(PENDING_ID) } ?: storedPending()
@@ -76,6 +115,7 @@ class WidgetController(
         val restoredOptions = saved?.getBundle(PENDING_OPTIONS)
         val restoredStack = saved?.getBoolean(PENDING_STACK, false) == true
         val restoredToday = saved?.getString(PENDING_TODAY)?.let { runCatching { TodaySize.valueOf(it) }.getOrNull() }
+        val restoredTodayReplaceId = saved?.takeIf { it.containsKey(PENDING_TODAY_REPLACE) }?.getInt(PENDING_TODAY_REPLACE)
         // A stack add is committed once the id is in that stack; Today once it's listed; a placement once Home shows it.
         val alreadyCommitted = restoredPlacement?.let {
             when {
@@ -86,7 +126,8 @@ class WidgetController(
         } == true
         val validPending = restoredId >= 0 && restoredPlacement?.id == restoredId &&
             restoredId in host.appWidgetIds && restoredProvider != null && restoredProfile != null &&
-            restoredStatus != null && (!hasOriginal || restoredOriginal != null)
+            restoredStatus != null && (!hasOriginal || restoredOriginal != null) &&
+            (restoredTodayReplaceId == null || (restoredToday != null && model.state.value.todayWidgets.any { it.id == restoredTodayReplaceId }))
         if (alreadyCommitted) {
             // The process may stop after Home is persisted but before the durable
             // transaction is cleared. The retained binding is already complete.
@@ -101,20 +142,22 @@ class WidgetController(
             pendingOptions = restoredOptions
             pendingStack = restoredStack
             pendingTodaySize = restoredToday
+            pendingTodayReplaceId = restoredTodayReplaceId
             persistPending()
             onExternalSetupChanged(true)
         } else {
             // A malformed bundle may point at a widget already owned by Home or Undo.
             // Clear the transaction, but only delete an ID known to be unretained.
-            if (restoredId >= 0 && restoredId !in model.retainedWidgetIds) host.deleteAppWidgetId(restoredId)
+            if (model.canPruneWidgetIds && restoredId >= 0 && restoredId !in model.retainedWidgetIds)
+                host.deleteAppWidgetId(restoredId)
             clearPending()
         }
+        restoreReconfigure(bundle)
         reconcileHostIds()
         if (!observingModel) {
             observingModel = true
             activity.lifecycleScope.launch { model.state.collectLatest { reconcileHostIds() } }
         }
-        restoreReconfigure(bundle)
     }
 
     fun save(bundle: Bundle) {
@@ -126,12 +169,29 @@ class WidgetController(
         setupStatus?.let { bundle.putString(PENDING_STATUS, it.name) }
         bundle.putBoolean(PENDING_STACK, pendingStack)
         bundle.putString(PENDING_TODAY, pendingTodaySize?.name)
+        pendingTodayReplaceId?.let { bundle.putInt(PENDING_TODAY_REPLACE, it) }
         pendingOptions?.let { bundle.putBundle(PENDING_OPTIONS, it) }
         reconfigureWidgetId?.let { bundle.putInt(RECONFIGURE_ID, it) }
     }
 
     fun clearFailure() { failureMessage = null }
-    fun label(id: Int): String = manager.getAppWidgetInfo(id)?.loadLabel(activity.packageManager) ?: activity.getString(R.string.widget)
+    fun label(id: Int): String {
+        val info = manager.getAppWidgetInfo(id) ?: return activity.getString(R.string.widget)
+        return if (AppSecurity.isProtected(info.provider.packageName, info.profile)) activity.getString(R.string.security_widget_locked)
+            else info.loadLabel(activity.packageManager)
+    }
+
+    /** Imported descriptors follow the same policy before a new widget binding exists. */
+    fun isProtected(id: Int, slot: Int): Boolean {
+        if (id >= 0) manager.getAppWidgetInfo(id)?.let {
+            return AppSecurity.isProtected(it.provider.packageName, it.profile)
+        }
+        if (id != NEEDS_BINDING_WIDGET) return false
+        val restore = restoreDescriptor(slot) ?: return false
+        val provider = ComponentName.unflattenFromString(restore.providerComponent) ?: return false
+        val profile = if (restore.isWork) userManager.getUserForSerialNumber(restore.userSerial) else Process.myUserHandle()
+        return AppSecurity.isProtected(provider.packageName, profile)
+    }
     fun providers(profile: UserHandle): List<AppWidgetProviderInfo> =
         manager.getInstalledProvidersForProfile(profile)
     fun personalProviders(): List<AppWidgetProviderInfo> = providers(Process.myUserHandle())
@@ -140,19 +200,41 @@ class WidgetController(
 
     fun canReconfigure(id: Int): Boolean {
         val info = manager.getAppWidgetInfo(id) ?: return false
-        return id >= 0 && model.state.value.widgetPlacements.any { it.id == id } && info.configure != null &&
+        val state = model.state.value
+        return id >= 0 && (state.widgetPlacements.any { it.id == id } || state.todayWidgets.any { it.id == id }) && info.configure != null &&
             info.widgetFeatures and AppWidgetProviderInfo.WIDGET_FEATURE_RECONFIGURABLE != 0
     }
 
     /** Opens configuration for an existing binding without changing its ID or Home layout. */
     fun reconfigure(id: Int): Boolean {
         if (pendingPlacement != null || reconfigureWidgetId != null || !canReconfigure(id)) return false
+        val info = manager.getAppWidgetInfo(id) ?: return false
+        if (AppSecurity.isProtected(info.provider.packageName, info.profile)) {
+            AppSecurity.run(activity, info.provider.packageName, info.profile) {
+                if (pendingPlacement == null && reconfigureWidgetId == null && canReconfigure(id)) beginReconfigure(id)
+            }
+            return true
+        }
+        return beginReconfigure(id)
+    }
+
+    private fun beginReconfigure(id: Int): Boolean {
         reconfigureWidgetId = id
         reconfigureStore.edit().putInt(RECONFIGURE_ID, id).apply()
         return launchReconfigure()
     }
 
-    fun finishPendingReconfigure(): Boolean = reconfigureWidgetId?.let { launchReconfigure() } ?: false
+    fun finishPendingReconfigure(): Boolean {
+        val id = reconfigureWidgetId ?: return false
+        val info = manager.getAppWidgetInfo(id) ?: return launchReconfigure()
+        if (AppSecurity.isProtected(info.provider.packageName, info.profile)) {
+            AppSecurity.run(activity, info.provider.packageName, info.profile) {
+                if (reconfigureWidgetId == id) launchReconfigure()
+            }
+            return true
+        }
+        return launchReconfigure()
+    }
     fun cancelPendingReconfigure() = clearReconfigure()
 
     fun restoreDescriptor(slot: Int) = model.state.value.layout.widgetRestore(slot)
@@ -201,15 +283,27 @@ class WidgetController(
         ?: legacyPlacement(slot, id))
 
     fun add(placement: WidgetPlacement, provider: AppWidgetProviderInfo, grid: WidgetGridSizing? = null,
-        contentSize: WidgetContentSize? = null, stack: Boolean = false, todaySize: TodaySize? = null) {
+        contentSize: WidgetContentSize? = null, stack: Boolean = false, todaySize: TodaySize? = null, todayReplaceId: Int? = null) {
+        AppSecurity.run(activity, provider.provider.packageName, provider.profile) {
+            addAuthenticated(placement, provider, grid, contentSize, stack, todaySize, todayReplaceId)
+        }
+    }
+
+    private fun addAuthenticated(placement: WidgetPlacement, provider: AppWidgetProviderInfo, grid: WidgetGridSizing?,
+        contentSize: WidgetContentSize?, stack: Boolean, todaySize: TodaySize?, todayReplaceId: Int?) {
         if (reconfigureWidgetId != null) {
             failureMessage = activity.getString(R.string.finish_or_cancel_the_open_widget_setting)
             return
         }
         cancel()
         failureMessage = null
+        if (todayReplaceId != null && model.state.value.todayWidgets.none { it.id == todayReplaceId }) {
+            failureMessage = CHANGED
+            return
+        }
         pendingStack = stack
         pendingTodaySize = todaySize
+        pendingTodayReplaceId = todayReplaceId
         pendingId = host.allocateAppWidgetId()
         pendingPlacement = placement.copy(id = pendingId)
         pendingOriginal = model.placement(placement.slot)
@@ -236,14 +330,31 @@ class WidgetController(
         ?: legacyPlacement(slot, EMPTY_WIDGET), provider)
 
     /** Binds [provider] as a new Today View widget of [size]. Never touches Home's placements. */
-    fun addToToday(provider: AppWidgetProviderInfo, size: TodaySize, grid: WidgetGridSizing? = null) =
-        add(todayTemplate(size), provider, grid, todaySize = size)
+    fun addToToday(provider: AppWidgetProviderInfo, size: TodaySize, grid: WidgetGridSizing? = null, span: WidgetSpan? = null,
+        replaceId: Int? = null) =
+        add(todayTemplate(size).let { if (span != null) it.copy(spanX = span.width, spanY = span.height) else it },
+            provider, grid, todaySize = size, todayReplaceId = replaceId)
+
+    fun setTodayBuiltin(id: Int, size: TodaySize, span: WidgetSpan? = null, replaceId: Int? = null): Boolean {
+        val committed = if (replaceId != null) model.replaceTodayWidget(replaceId, id, size, span)
+            else model.addTodayWidget(id, size, span)
+        failureMessage = if (committed) null else activity.getString(R.string.widget_could_not_be_replaced)
+        if (committed) reconcileHostIds()
+        return committed
+    }
 
     /** Binds [provider] as a new widget in the Smart Stack at [slot], sized like that placement. */
     fun addToStack(slot: Int, provider: AppWidgetProviderInfo, grid: WidgetGridSizing? = null): Boolean {
         val placement = model.placement(slot) ?: return false
         add(placement, provider, grid, stack = true)
         return true
+    }
+
+    private fun configureProtected() {
+        val id = pendingId
+        if (id < 0) return
+        val info = manager.getAppWidgetInfo(id) ?: return fail()
+        AppSecurity.run(activity, info.provider.packageName, info.profile) { if (pendingId == id) configure() }
     }
 
     private fun configure() {
@@ -273,10 +384,13 @@ class WidgetController(
 
     private fun complete() {
         val placement = pendingPlacement ?: return cancel()
-        val originalStillPresent = model.placement(placement.slot) == pendingOriginal
         val today = pendingTodaySize
+        val replacingToday = pendingTodayReplaceId
+        val originalStillPresent = if (today != null) replacingToday == null || model.state.value.todayWidgets.any { it.id == replacingToday }
+            else model.placement(placement.slot) == pendingOriginal
         val committed = originalStillPresent && pendingId >= 0 && when {
-            today != null -> model.addTodayWidget(pendingId, today)
+            today != null && replacingToday != null -> model.replaceTodayWidget(replacingToday, pendingId, today, WidgetSpan(placement.spanX, placement.spanY))
+            today != null -> model.addTodayWidget(pendingId, today, WidgetSpan(placement.spanX, placement.spanY))
             pendingStack -> model.addToStack(placement.slot, pendingId)
             else -> model.placeWidget(placement)
         }
@@ -296,8 +410,12 @@ class WidgetController(
 
     private fun reconcileHostIds() {
         if (!model.canPruneWidgetIds) return
-        val retained = model.retainedWidgetIds + pendingId + listOfNotNull(reconfigureWidgetId)
-        host.appWidgetIds.filter { it !in retained }.forEach(host::deleteAppWidgetId)
+        val retained = (model.retainedWidgetIds + pendingId + listOfNotNull(reconfigureWidgetId))
+            .filter { it >= 0 }.toSet()
+        // Unknown host IDs may belong to a retained binding not yet loaded after an update.
+        // Only prune IDs this controller observed Folio retain and subsequently remove.
+        lastRetainedIds?.minus(retained)?.forEach(host::deleteAppWidgetId)
+        lastRetainedIds = retained
     }
 
     private fun cancel() {
@@ -307,6 +425,15 @@ class WidgetController(
 
     fun finishPendingSetup() {
         if (pendingId < 0) return
+        val id = pendingId
+        val provider = pendingProvider ?: return fail()
+        val profile = pendingProfile ?: return fail()
+        AppSecurity.run(activity, provider.packageName, profile) {
+            if (pendingId == id) finishPendingSetupAuthenticated()
+        }
+    }
+
+    private fun finishPendingSetupAuthenticated() {
         val info = manager.getAppWidgetInfo(pendingId)
         if (info != null) configure()
         else {
@@ -330,6 +457,7 @@ class WidgetController(
     private fun clearPending() {
         pendingStack = false
         pendingTodaySize = null
+        pendingTodayReplaceId = null
         pendingId = -1
         pendingPlacement = null
         pendingOriginal = null
@@ -402,6 +530,7 @@ class WidgetController(
             .putString(PENDING_STATUS, status.name)
             .putBoolean(PENDING_STACK, pendingStack)
             .putString(PENDING_TODAY, pendingTodaySize?.name)
+        pendingTodayReplaceId?.let { editor.putInt(PENDING_TODAY_REPLACE, it) }
         pendingOptions?.let { options ->
             editor.putInt(PENDING_WIDTH, options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH))
                 .putInt(PENDING_HEIGHT, options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT))
@@ -423,6 +552,7 @@ class WidgetController(
             putString(PENDING_STATUS, pendingStore.getString(PENDING_STATUS, null))
             putBoolean(PENDING_STACK, pendingStore.getBoolean(PENDING_STACK, false))
             putString(PENDING_TODAY, pendingStore.getString(PENDING_TODAY, null))
+            if (pendingStore.contains(PENDING_TODAY_REPLACE)) putInt(PENDING_TODAY_REPLACE, pendingStore.getInt(PENDING_TODAY_REPLACE, 0))
             if (pendingStore.contains(PENDING_WIDTH) && pendingStore.contains(PENDING_HEIGHT)) {
                 putBundle(PENDING_OPTIONS, sizeOptions(pendingStore.getInt(PENDING_WIDTH, 1), pendingStore.getInt(PENDING_HEIGHT, 1)))
             }
@@ -467,6 +597,7 @@ class WidgetController(
         private const val PENDING_HEIGHT = "pendingWidgetHeight"
         private const val PENDING_STACK = "pendingWidgetStack"
         private const val PENDING_TODAY = "pendingWidgetToday"
+        private const val PENDING_TODAY_REPLACE = "pendingWidgetTodayReplace"
         /** Off-grid page for Today View sizing templates, so Home never draws or places them. */
         const val TODAY_TEMPLATE_PAGE = -100
 

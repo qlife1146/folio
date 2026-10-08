@@ -25,30 +25,9 @@ const DEFINITIONS = [
     options: [{ name: 'version', description: 'For example 0.6.6. The newest one by default.', type: 3 }],
   },
   {
-    name: 'roadmap',
-    description: 'What is being built, planned, or only explored',
-    options: [
-      {
-        name: 'when',
-        description: 'Next, Later or Exploring. All of them by default.',
-        type: 3,
-        choices: [
-          { name: 'Next', value: 'next' },
-          { name: 'Later', value: 'later' },
-          { name: 'Exploring', value: 'exploring' },
-        ],
-      },
-    ],
-  },
-  {
     name: 'help',
     description: 'The help page for something',
     options: [{ name: 'topic', description: 'For example gestures, widgets, backup', type: 3 }],
-  },
-  {
-    name: 'tweak',
-    description: 'What a tweak changes',
-    options: [{ name: 'name', description: 'For example Cabinet', type: 3 }],
   },
   {
     name: 'screens',
@@ -117,19 +96,6 @@ export const handlers = {
     ].join('\n'))
   },
 
-  async roadmap(options, sources) {
-    const sections = (await sources.roadmap()).filter((section) => !section.shipped)
-    const wanted = options.when
-      ? sections.filter((section) => section.name.toLowerCase() === options.when)
-      : sections
-    if (!wanted.length) return `Nothing under ${options.when}. Try next, later or exploring.`
-    const blocks = wanted.map((section) => {
-      const items = section.items.slice(0, 6).map((item) => `- **${item.title}:** ${item.detail}`)
-      return [`**${section.name}**`, ...items].join('\n')
-    })
-    return trim([...blocks, `\n[The whole roadmap](${SITE}/roadmap/)`].join('\n\n'))
-  },
-
   async help(options, sources) {
     const pages = await sources.help()
     if (!pages.length) return `The help pages are at ${SITE}/help/`
@@ -147,25 +113,6 @@ export const handlers = {
       ].join('\n')
     }
     return `**${match.title}**\n${match.url}`
-  },
-
-  async tweak(options, sources) {
-    const tweaks = await sources.tweaks()
-    if (!options.name) {
-      return [
-        `**Folio's tweaks**`,
-        ...tweaks.map((tweak) => `- **${tweak.name}:** ${tweak.description}`),
-        `\n[What each one changes](${SITE}/tweaks/)`,
-      ].join('\n')
-    }
-    const needle = options.name.toLowerCase()
-    const match = tweaks.find((tweak) => tweak.name.toLowerCase() === needle) ??
-      tweaks.find((tweak) => tweak.name.toLowerCase().includes(needle) || tweak.id.includes(needle))
-    if (!match) {
-      return `No tweak called ${options.name}. There is ${tweaks.map((tweak) => tweak.name).join(', ')}.`
-    }
-    const screens = match.screens.length ? `\nScreens: ${match.screens.join(', ')}.` : ''
-    return trim(`**${match.name}** ${match.version}\n${match.description}${screens}\n\n${SITE}/tweaks/`)
   },
 
   async screens(options, sources) {

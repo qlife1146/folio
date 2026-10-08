@@ -4,3 +4,4 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose") version "2.4.20" apply false
     id("androidx.baselineprofile") version "1.5.0" apply false
 }
+

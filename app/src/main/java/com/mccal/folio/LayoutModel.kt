@@ -83,6 +83,8 @@ data class HomeGeometry(
     val columnsInset: Float = 0f,
     /** The bottom dock bar's distance between apps. */
     val dockPitch: Float = 0f,
+    /** Unfolded portrait centers Home across the whole window, regardless of dock placement. */
+    val centeredPortrait: Boolean = false,
 )
 
 /**
@@ -184,12 +186,12 @@ fun homeGeometry(width: Float, height: Float, preset: LayoutPreset, labels: Bool
     val p = preset.sanitized()
     // Unfolded Duo layout only with regular size both ways; the cover in landscape is still compact.
     // Two Duo panels side by side need a window wider than tall. Taller than wide (portrait), iPhone Duo keeps one
-    // centered Home page. Automatic dock placement keeps the Side Bar in either orientation.
+    // centered Home page. Automatic dock placement moves below the page only in unfolded portrait.
     val regular = fitsRegularHomeLayout(width, height, classScale)
     val tallRegular = regular && height > width
     // Landscape phone screens keep the Side Bar dock: a bottom bar would take too much of a short screen.
     val horizontalDock = when (p.dockPlacement) {
-        DockPlacement.AUTOMATIC -> false
+        DockPlacement.AUTOMATIC -> tallRegular
         DockPlacement.SIDE -> false
         // Short windows (split screen, pop-up windows) keep the Side Bar too, so the page still fits above the bar.
         DockPlacement.BOTTOM -> regular || (height > width && height >= HOME_REGULAR_MIN_HEIGHT_DP)
@@ -321,12 +323,13 @@ fun homeGeometry(width: Float, height: Float, preset: LayoutPreset, labels: Bool
     val basePitch = dockIconSize(icon) + 22f
     val barRoom = (if (dockBesideRail) width - p.dockWidth - 12f else width) - 32f
     val dockPitch = if (dockSpace <= 0f) basePitch else minOf(basePitch + dockSpace, maxOf(basePitch, (barRoom - 16f) / 4f))
-    // Upright unfolded with the dock at the bottom, the page is centered, so narrower columns stay centered too.
-    val columnsInset = if (!splitColumns && tallRegular && horizontalDock) (gridWidth - 4f * cell) / 2f else 0f
+    // Upright unfolded pages keep narrower columns centered regardless of dock placement.
+    val columnsInset = if (!splitColumns && tallRegular) (gridWidth - 4f * cell) / 2f else 0f
     return HomeGeometry(expanded, homeWidth, gridWidth, icon, row, widget, contentTop, dockTop, dockHeight, dockRowHeight,
         splitColumns = splitColumns, cellWidth = if (splitColumns) splitCell else cell, zoneGap = if (splitColumns) zoneGap else 0f,
         horizontalDock = horizontalDock, dockBarHeight = dockBarHeight, dockBesideRail = dockBesideRail, statusTop = statusTop,
-        appRows = rows, fitAppRows = if (splitColumns) BASE_APP_ROWS else fitRows, rowGap = gap, columnsInset = columnsInset, dockPitch = dockPitch)
+        appRows = rows, fitAppRows = if (splitColumns) BASE_APP_ROWS else fitRows, rowGap = gap, columnsInset = columnsInset,
+        centeredPortrait = tallRegular, dockPitch = dockPitch)
 }
 
 /** Keep stored order stable across installs, removals and configuration changes. */

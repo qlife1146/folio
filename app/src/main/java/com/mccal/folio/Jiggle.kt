@@ -107,12 +107,13 @@ internal fun JigglePill(label: String, icon: ImageVector? = null, description: S
     modifier: Modifier = Modifier, onClick: () -> Unit) {
     Box(modifier.minimumInteractiveComponentSize(), contentAlignment = Alignment.Center) {
         Row(Modifier.heightIn(min = 34.dp).clip(CircleShape)
-            .background(if (emphasized) Color.White.copy(alpha = .92f) else Color.White.copy(alpha = .22f))
+            .materialBackground(CircleShape, tint = FolioGlass.panel)
             .clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = description }
             .padding(horizontal = if (label.isEmpty()) 7.dp else FolioSpace.LARGE.dp), verticalAlignment = Alignment.CenterVertically) {
-            val ink = if (emphasized) Color.Black else Color.White
+            val ink = FolioGlass.ink
             icon?.let { Icon(it, null, tint = ink, modifier = Modifier.size(20.dp)) }
-            if (label.isNotEmpty()) Text(label, color = ink, fontSize = FolioType.SUBHEAD.sp, fontWeight = FontWeight.SemiBold)
+            if (label.isNotEmpty()) Text(label, color = ink, fontSize = FolioType.SUBHEAD.sp,
+                fontWeight = if (emphasized) FontWeight.Bold else FontWeight.SemiBold)
         }
     }
 }
@@ -120,12 +121,12 @@ internal fun JigglePill(label: String, icon: ImageVector? = null, description: S
 /** iOS 16+ Home "Search" capsule that sits where the page dots are. */
 @Composable
 internal fun HomeSearchPill(onClick: () -> Unit) {
-    val ink = LocalHomeInk.current
-    Row(Modifier.heightIn(min = 30.dp).clip(CircleShape).background(if (ink.dark) Color.White.copy(alpha = .45f) else Color.White.copy(alpha = .2f))
+    val ink = FolioGlass.ink
+    Row(Modifier.heightIn(min = 30.dp).clip(CircleShape).materialBackground(CircleShape, tint = FolioGlass.panel)
         .clickable(role = Role.Button, onClickLabel = "Search", onClick = onClick)
         .padding(horizontal = FolioSpace.COMFY.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Rounded.Search, null, tint = ink.primary, modifier = Modifier.size(15.dp))
+        Icon(Icons.Rounded.Search, null, tint = ink, modifier = Modifier.size(15.dp))
         Spacer(Modifier.width(5.dp))
-        Text(stringResource(R.string.search), color = ink.primary, fontSize = FolioType.FOOTNOTE.sp, fontWeight = FontWeight.Medium)
+        Text(stringResource(R.string.search), color = ink, fontSize = FolioType.FOOTNOTE.sp, fontWeight = FontWeight.Medium)
     }
 }

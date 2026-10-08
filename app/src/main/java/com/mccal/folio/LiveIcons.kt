@@ -95,6 +95,11 @@ internal data class IconLook(val style: IconStyle = IconStyle.DEFAULT, val tint:
 
 /** Unread notification counts per package, for icon badges. */
 internal val LocalBadgeCounts = androidx.compose.runtime.compositionLocalOf { emptyMap<String, Int>() }
+internal val LocalProfileBadgeCounts = androidx.compose.runtime.compositionLocalOf<Map<AppSecurityKey, Int>?> { null }
+
+internal fun appBadgeCount(app: AppEntry, counts: Map<String, Int>, profiles: Map<AppSecurityKey, Int>?): Int =
+    if (!AppSecurity.badgeVisible(app.packageName, app.user)) 0
+    else if (profiles != null) profiles[AppSecurity.key(app)] ?: 0 else counts[app.packageName] ?: 0
 
 private val SquircleShape = androidx.compose.foundation.shape.GenericShape { size, _ ->
     // Superellipse (n = 4), the iOS-style continuous-corner icon shape.
@@ -182,7 +187,7 @@ internal fun AppIcon(app: AppEntry, contentDescription: String?, modifier: Modif
         look.liveLook == "DARK" -> LivePalette.of(IconStyle.DARK, null)
         else -> LivePalette.of(if (look.style == IconStyle.DEFAULT && darkSource) IconStyle.DARK else look.style, accent)
     }
-    val badgeCount = if (!badge || look.badges == BadgeStyle.OFF) 0 else LocalBadgeCounts.current[app.component.packageName] ?: 0
+    val badgeCount = if (!badge || look.badges == BadgeStyle.OFF) 0 else appBadgeCount(app, LocalBadgeCounts.current, LocalProfileBadgeCounts.current)
     Box(modifier.semantics { contentDescription?.let { this.contentDescription = it } }) {
         val fill = Modifier.fillMaxSize().then(if (clipShape != null) Modifier.clip(clipShape) else Modifier)
         // App icon bitmaps carry a small transparent margin; inset the drawn live icons to the same visual size.
@@ -568,9 +573,8 @@ internal object BadgeClears {
  * The seen counts live in [LauncherState.badgesSeen], so they survive a restart; nothing is dismissed, and Folio's
  * notification list is left exactly as the phone reports it.
  *
- * Both functions take the seen counts rather than reading a setting, so the caller can gate them
- * ([FeatureGate.BADGES_WHEN_OPENED]) by passing an empty map: a phone the feature is shut for hides no badge, writes
- * nothing, and pays nothing for it.
+ * Both functions take the seen counts rather than reading a setting. Passing an empty map
+ * leaves all badges visible when the setting is off.
  */
 internal object BadgesWhenOpened {
     /** [counts] with the apps whose badge has already been seen left out. */

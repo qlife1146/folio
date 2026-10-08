@@ -75,7 +75,8 @@ fun moveFolderApp(layout: HomeLayout, folderId: String, appId: String, index: In
     return layout.copy(folders = layout.folders.map { if (it.id == folderId) it.copy(appIds = members) else it })
 }
 
-fun removeAppFromFolder(layout: HomeLayout, folderId: String, appId: String, target: DropTarget, appRows: Int = MAX_APP_ROWS): HomeLayout {
+fun removeAppFromFolder(layout: HomeLayout, folderId: String, appId: String, target: DropTarget, appRows: Int = MAX_APP_ROWS,
+    direction: HomePushDirection? = null): HomeLayout {
     val folder = layout.folder(folderId) ?: return layout
     if (appId !in folder.appIds || target is DropTarget.Widget || target is DropTarget.Library) return layout
     val folderCell = layout.indexOfShortcut(folderId)
@@ -88,7 +89,7 @@ fun removeAppFromFolder(layout: HomeLayout, folderId: String, appId: String, tar
     }
     if (target == DropTarget.Remove) return next
     if (target is DropTarget.Home && target.index == folderCell) return layout
-    val placed = dropApp(next, appId, target, appRows)
+    val placed = dropApp(next, appId, target, appRows, direction)
     return if (placed == next) layout else placed
 }
 

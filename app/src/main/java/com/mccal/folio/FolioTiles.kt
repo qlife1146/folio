@@ -11,7 +11,7 @@ import org.json.JSONObject
 import java.lang.ref.WeakReference
 
 /**
- * Quick Settings tiles for Samsung's pull-down: Spotlight, and switches for the island and dock over other
+ * Quick Settings tiles for Samsung's pull-down: Spotlight, Live Activities, the dock over other
  * apps and StandBy. Toggles go through the running [LauncherModel] when there is one (so Home never writes
  * an older value back), otherwise straight into the saved launcher state that Folio reads on start.
  */
@@ -85,16 +85,18 @@ abstract class FolioToggleTile(private val key: String, private val default: Boo
         }
     }
 
-    /** The island and dock over other apps need Folio's accessibility service. */
+    /** The dock over other apps needs Folio's accessibility service. */
     protected fun openAccessibilityIfNeeded() {
         if (!SystemShadeAccessibilityService.isConnected()) openAndCollapse(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
     }
 }
 
-class IslandTileService : FolioToggleTile(SettingKeys.ISLAND_EVERYWHERE, false) {
-    override fun read(state: LauncherState) = state.islandEverywhere
-    override fun write(model: LauncherModel, value: Boolean) = model.setIslandEverywhere(value)
-    override fun afterEnable() = openAccessibilityIfNeeded()
+class IslandTileService : FolioToggleTile(SettingKeys.ISLAND, true) {
+    override fun read(state: LauncherState) = state.island
+    override fun write(model: LauncherModel, value: Boolean) = model.setIsland(value)
+    override fun afterEnable() {
+        if (!IslandListenerService.hasAccess(this)) openAndCollapse(IslandListenerService.accessSettingsIntent(this))
+    }
 }
 
 class DockTileService : FolioToggleTile(SettingKeys.DOCK_EVERYWHERE, false) {

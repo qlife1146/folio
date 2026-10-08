@@ -32,9 +32,12 @@ private class FolioVoiceSession(service: VoiceInteractionSessionService) : Voice
         // The chosen assistant's voice screen, or Folio's picker (also the fallback if that app was uninstalled).
         val target = SideKeyHold.current(context).intent(context)
             ?: Intent(context, AssistPickerActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        runCatching { startAssistantActivity(target) }
-            .onFailure { runCatching { context.startActivity(target) } }
-        hide()
+        AppSecurity.run(context, target.`package` ?: target.component?.packageName ?: context.packageName,
+            android.os.Process.myUserHandle()) {
+            runCatching { startAssistantActivity(target) }
+                .onFailure { runCatching { context.startActivity(target) } }
+            hide()
+        }
     }
 }
 
@@ -64,6 +67,8 @@ internal enum class SideKeyHold(val label: String, val action: String?, val pack
         if (this == SEARCH_NO_AI) return Intent(context, AssistPickerActivity::class.java)
             .putExtra(AssistPickerActivity.EXTRA_SEARCH_ONLY, true).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         if (action == null || packageName == null) return null
+        AppSecurity.initialize(context)
+        if (AppSecurity.isHidden(packageName, android.os.Process.myUserHandle())) return null
         val intent = Intent(action).setPackage(packageName).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         return intent.takeIf { it.resolveActivity(context.packageManager) != null }
     }

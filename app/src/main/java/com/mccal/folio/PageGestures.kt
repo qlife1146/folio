@@ -92,13 +92,17 @@ internal fun Modifier.onePageGestures(
     motion: WorkspacePageMotion? = null,
     enabled: Boolean = true,
     canStartDownwardSwipe: (Offset) -> Boolean = { true },
+    canStartUpwardSwipe: (Offset) -> Boolean = { true },
     /** False for touches that belong to another control (e.g. the page scrubber) and must not page Home. */
     canStartGesture: (Offset) -> Boolean = { true },
     onDownwardSwipe: ((ShadePanel) -> Unit)? = null,
+    onUpwardSwipe: (() -> Unit)? = null,
     onLeadingOverscroll: (() -> Unit)? = null,
 ) : Modifier {
     val currentEnabled by rememberUpdatedState(enabled)
     val currentCanStartDownwardSwipe by rememberUpdatedState(canStartDownwardSwipe)
+    val currentCanStartUpwardSwipe by rememberUpdatedState(canStartUpwardSwipe)
+    val currentUpwardSwipe by rememberUpdatedState(onUpwardSwipe)
     val currentCanStartGesture by rememberUpdatedState(canStartGesture)
     val currentDownwardSwipe by rememberUpdatedState(onDownwardSwipe)
     val currentLeadingOverscroll by rememberUpdatedState(onLeadingOverscroll)
@@ -154,11 +158,20 @@ internal fun Modifier.onePageGestures(
                                     // but must not trigger a vertical system action on finger-up.
                                     val openDownward = change.pressed && distance.y > 0f && currentDownwardSwipe != null &&
                                         currentCanStartDownwardSwipe(down.position)
-                                    cancelReason = if (openDownward) "downward_action" else "vertical_axis"
+                                    val openUpward = change.pressed && distance.y < 0f && currentUpwardSwipe != null &&
+                                        currentCanStartUpwardSwipe(down.position)
+                                    cancelReason = when {
+                                        openDownward -> "downward_action"
+                                        openUpward -> "upward_action"
+                                        else -> "vertical_axis"
+                                    }
                                     if (openDownward) {
                                         change.consume()
                                         currentDownwardSwipe?.invoke(shadePanelForStart(down.position.x, down.position.y, size.width.toFloat(),
                                             maxOf(size.height * .18f, 120.dp.toPx())))
+                                    } else if (openUpward) {
+                                        change.consume()
+                                        currentUpwardSwipe?.invoke()
                                     }
                                     break
                                 }

@@ -64,7 +64,8 @@ data class NotificationItem(val key: String, val packageName: String, val appLab
     val title: String?, val text: String?, val postTime: Long, val clearable: Boolean,
     val contentIntent: android.app.PendingIntent?,
     /** Messaging notifications: whether quick reply / mark-as-read are offered by the app. */
-    val canReply: Boolean = false, val canMarkRead: Boolean = false, val channelId: String? = null)
+    val canReply: Boolean = false, val canMarkRead: Boolean = false, val channelId: String? = null,
+    val user: android.os.UserHandle = android.os.Process.myUserHandle())
 
 /** A messaging app's notification channel and whether Android pops it up itself (importance HIGH or above). */
 data class MessageChannel(val packageName: String, val appLabel: String, val channelId: String, val channelName: String?, val importance: Int,
@@ -136,7 +137,10 @@ sealed interface IslandEvent {
  */
 class IslandListenerService : NotificationListenerService() {
     private var sessions: MediaSessionManager? = null
-    private val sessionListener = MediaSessionManager.OnActiveSessionsChangedListener { publish() }
+    private val sessionListener = MediaSessionManager.OnActiveSessionsChangedListener {
+        outputMixBlockedMutable.value = true
+        publish()
+    }
     // All reading happens off the main thread, coalesced so bursts of posts cost one pass.
     private val worker = android.os.HandlerThread("folio-island").apply { start() }
     private val workerHandler = android.os.Handler(worker.looper)
@@ -144,6 +148,8 @@ class IslandListenerService : NotificationListenerService() {
     private val controllerCallbacks = mutableMapOf<android.media.session.MediaSession.Token, Pair<MediaController, MediaController.Callback>>()
 
     override fun onListenerConnected() {
+        AppSecurity.initialize(this)
+        outputMixBlockedMutable.value = true
         connected.value = true
         sessions = getSystemService(MediaSessionManager::class.java)
         runCatching { sessions?.addOnActiveSessionsChangedListener(sessionListener, component(this), workerHandler) }
@@ -152,18 +158,26 @@ class IslandListenerService : NotificationListenerService() {
     }
 
     override fun onListenerDisconnected() {
+        outputMixBlockedMutable.value = true
         connected.value = false
+        workerHandler.removeCallbacks(publishPass)
         runCatching { sessions?.removeOnActiveSessionsChangedListener(sessionListener) }
         clearControllerCallbacks()
         if (instance === this) instance = null
         mutable.value = null
         notificationsMutable.value = emptyList() // don't keep other apps' content after access is gone
+        synchronized(privacyLock) {
+            badgeSources = emptyList()
+            badgeRevisionMutable.value++
+            messageChannelsMutable.value = emptyMap()
+        }
+        if (IslandEvents.latest.value?.first is IslandEvent.Message) IslandEvents.dismiss()
     }
 
     override fun onDestroy() {
         workerHandler.removeCallbacksAndMessages(null)
         worker.quitSafely()
-        if (instance === this) instance = null
+        if (instance === this) { instance = null; outputMixBlockedMutable.value = true }
         super.onDestroy()
     }
 
@@ -200,6 +214,7 @@ class IslandListenerService : NotificationListenerService() {
      * and (when [avoidDouble]) no second banner on top of Android's own pop-up.
      */
     private fun shouldPopUp(sbn: StatusBarNotification, rankingMap: RankingMap?, avoidDouble: Boolean): Boolean {
+        if (AppSecurity.isProtected(sbn.packageName, sbn.user)) return false
         val n = sbn.notification
         if (sbn.packageName == packageName || sbn.isOngoing || n.flags and Notification.FLAG_GROUP_SUMMARY != 0) return false
         if (System.currentTimeMillis() - sbn.postTime > 10_000) return false
@@ -229,8 +244,11 @@ class IslandListenerService : NotificationListenerService() {
         val text = (last?.text ?: extras.getCharSequence(Notification.EXTRA_TEXT))?.toString()
         val avatar = runCatching { last?.person?.icon?.loadDrawable(this)?.toBitmap(96, 96) }.getOrNull()
             ?: runCatching { n.getLargeIcon()?.loadDrawable(this)?.toBitmap(96, 96) }.getOrNull()
-        IslandEvents.post(IslandEvent.Message(sbn.key, sbn.packageName, appLabel(sbn.packageName), sender, text, avatar,
-            appIcon(sbn.packageName), Messaging.replyAction(n) != null))
+        synchronized(privacyLock) {
+            if (!AppSecurity.isProtected(sbn.packageName, sbn.user))
+                IslandEvents.post(IslandEvent.Message(sbn.key, sbn.packageName, appLabel(sbn.packageName), sender, text, avatar,
+                    appIcon(sbn.packageName), Messaging.replyAction(n) != null))
+        }
     }
     /** Pops any other app's new notification into the island, when Other Notifications is on for that app. */
     private fun announceAlert(sbn: StatusBarNotification, rankingMap: RankingMap?) {
@@ -247,8 +265,11 @@ class IslandListenerService : NotificationListenerService() {
         // `when` is the app's own idea of when this was posted; postTime is Android's, and stands in when an app leaves it unset.
         if (isRepeat(sbn.key, title, text, n.`when`.takeIf { it > 0L } ?: sbn.postTime)) return
         val picture = runCatching { n.getLargeIcon()?.loadDrawable(this)?.toBitmap(96, 96) }.getOrNull()
-        IslandEvents.post(IslandEvent.Message(sbn.key, sbn.packageName, label, title ?: label, text, picture,
-            appIcon(sbn.packageName), Messaging.replyAction(n) != null, alert = true))
+        synchronized(privacyLock) {
+            if (!AppSecurity.isProtected(sbn.packageName, sbn.user))
+                IslandEvents.post(IslandEvent.Message(sbn.key, sbn.packageName, label, title ?: label, text, picture,
+                    appIcon(sbn.packageName), Messaging.replyAction(n) != null, alert = true))
+        }
     }
 
     /** A notification someone would want to see pop up: not media, a call, progress or a background service. */
@@ -275,10 +296,25 @@ class IslandListenerService : NotificationListenerService() {
     }
 
     private fun publishNow() {
-        val controllers = runCatching { sessions?.getActiveSessions(component(this)) }.getOrNull().orEmpty()
-        watch(controllers) // every pass, so ended sessions are unregistered even during a call
-        mutable.value = runCatching { currentOngoing() ?: currentMedia(controllers) ?: currentProgress() }.getOrNull()
-        notificationsMutable.value = runCatching { currentNotifications() }.getOrDefault(emptyList())
+        if (!connected.value || instance !== this) return
+        val allControllers = runCatching { sessions?.getActiveSessions(component(this)) }.getOrNull()
+        val controllers = allControllers.orEmpty().filterNot { AppSecurity.isProtected(it.packageName) }
+        // Also observe protected sessions so their playback can immediately block output-mix analysis.
+        watch(allControllers.orEmpty())
+        val ongoing = runCatching { currentOngoing() ?: currentMedia(controllers) ?: currentProgress() }.getOrNull()
+        val notifications = runCatching { currentNotifications() }.getOrDefault(emptyList())
+        val badges = runCatching { activeNotifications.orEmpty().filter(::notificationCandidate).map {
+            BadgeSource(it.key, it.packageName, it.user)
+        } }.getOrDefault(emptyList())
+        synchronized(privacyLock) {
+            if (!connected.value || instance !== this) return
+            outputMixBlockedMutable.value = allControllers == null || runCatching {
+                allControllers.any { AppSecurity.isProtected(it.packageName) && playbackIsLive(it.playbackState?.state) }
+            }.getOrDefault(true)
+            mutable.value = ongoing?.takeUnless { AppSecurity.isProtected(it.packageName) }
+            notificationsMutable.value = notifications.filterNot { AppSecurity.isProtected(it.packageName, it.user) }
+            if (badges != badgeSources) { badgeSources = badges; badgeRevisionMutable.value++ }
+        }
         runCatching { rememberMessageChannels() }
     }
 
@@ -297,7 +333,7 @@ class IslandListenerService : NotificationListenerService() {
     private fun rememberMessageChannels() {
         val ranking = Ranking()
         val map = currentRanking ?: return
-        val seen = activeNotifications.orEmpty().filter { it.packageName != packageName }
+        val seen = activeNotifications.orEmpty().filter { it.packageName != packageName && !AppSecurity.isProtected(it.packageName, it.user) }
             .mapNotNull { sbn ->
                 val message = Messaging.isMessage(sbn.notification)
                 if (!message && !isAlert(sbn)) return@mapNotNull null
@@ -306,15 +342,15 @@ class IslandListenerService : NotificationListenerService() {
                 MessageChannel(sbn.packageName, appLabel(sbn.packageName), channel.id, channel.name?.toString(), ranking.importance, message)
             }
         if (seen.isEmpty()) return
-        messageChannelsMutable.value = messageChannelsMutable.value + seen.associateBy { "${it.packageName}|${it.channelId}" }
+        synchronized(privacyLock) {
+            if (!connected.value || instance !== this) return
+            messageChannelsMutable.value = (messageChannelsMutable.value + seen.associateBy { "${it.packageName}|${it.channelId}" })
+                .filterValues { !AppSecurity.isProtected(it.packageName) }
+        }
     }
 
     private fun currentNotifications(): List<NotificationItem> = activeNotifications.orEmpty()
-        .filter { sbn ->
-            val n = sbn.notification
-            sbn.packageName != packageName && n.flags and Notification.FLAG_GROUP_SUMMARY == 0 && !isOverflowPlaceholder(sbn) &&
-                (n.extras.getCharSequence(Notification.EXTRA_TITLE) != null || n.extras.getCharSequence(Notification.EXTRA_TEXT) != null)
-        }
+        .filter { notificationCandidate(it) && !AppSecurity.isProtected(it.packageName, it.user) }
         .sortedByDescending { it.postTime }
         .map { sbn ->
             val extras = sbn.notification.extras
@@ -323,8 +359,14 @@ class IslandListenerService : NotificationListenerService() {
                 (extras.getCharSequence(Notification.EXTRA_BIG_TEXT) ?: extras.getCharSequence(Notification.EXTRA_TEXT))?.toString(),
                 sbn.postTime, sbn.isClearable, sbn.notification.contentIntent,
                 canReply = Messaging.replyAction(sbn.notification) != null, canMarkRead = Messaging.markReadAction(sbn.notification) != null,
-                channelId = sbn.notification.channelId)
+                channelId = sbn.notification.channelId, user = sbn.user)
         }
+
+    private fun notificationCandidate(sbn: StatusBarNotification): Boolean {
+        val n = sbn.notification
+        return sbn.packageName != packageName && n.flags and Notification.FLAG_GROUP_SUMMARY == 0 && !isOverflowPlaceholder(sbn) &&
+            (n.extras.getCharSequence(Notification.EXTRA_TITLE) != null || n.extras.getCharSequence(Notification.EXTRA_TEXT) != null)
+    }
 
     /** Samsung's System UI posts a "1 more notification" stand-in for its own overflow; it isn't a real notification. */
     private fun isOverflowPlaceholder(sbn: StatusBarNotification): Boolean {
@@ -336,10 +378,11 @@ class IslandListenerService : NotificationListenerService() {
     /** Calls, navigation and timers outrank media, as on iPhone. */
     private fun currentOngoing(): IslandActivity? {
         val ongoing = runCatching { activeNotifications }.getOrNull().orEmpty()
-            .filter { it.isOngoing && it.packageName != packageName }.sortedByDescending { it.postTime }
+            .filter { it.isOngoing && it.packageName != packageName && !AppSecurity.isProtected(it.packageName, it.user) }.sortedByDescending { it.postTime }
         fun title(sbn: StatusBarNotification) = sbn.notification.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()
         // Calls first (ringing ones may not be marked ongoing), like iPhone.
-        (runCatching { activeNotifications }.getOrNull().orEmpty().filter { it.packageName != packageName && CallControls.isCall(it.notification) }
+        (runCatching { activeNotifications }.getOrNull().orEmpty().filter {
+            it.packageName != packageName && !AppSecurity.isProtected(it.packageName, it.user) && CallControls.isCall(it.notification) }
             .sortedWith(compareByDescending<StatusBarNotification> { CallControls.isIncoming(it.notification) }.thenByDescending { it.postTime })
             .firstOrNull())?.let { sbn ->
             val n = sbn.notification
@@ -419,7 +462,7 @@ class IslandListenerService : NotificationListenerService() {
 
     private fun currentProgress(): IslandActivity.Progress? {
         val sbn = runCatching { activeNotifications }.getOrNull().orEmpty()
-            .filter { it.isOngoing && it.packageName != packageName && hasProgress(it.notification) }
+            .filter { it.isOngoing && it.packageName != packageName && !AppSecurity.isProtected(it.packageName, it.user) && hasProgress(it.notification) }
             .maxByOrNull { it.postTime } ?: return null
         val extras = sbn.notification.extras
         val max = extras.getInt(Notification.EXTRA_PROGRESS_MAX, 0)
@@ -444,8 +487,15 @@ class IslandListenerService : NotificationListenerService() {
         }
         controllers.filter { it.sessionToken !in controllerCallbacks }.forEach { controller ->
             val callback = object : MediaController.Callback() {
-                override fun onPlaybackStateChanged(state: PlaybackState?) = publish()
+                override fun onPlaybackStateChanged(state: PlaybackState?) {
+                    if (AppSecurity.isProtected(controller.packageName)) outputMixBlockedMutable.value = true
+                    publish()
+                }
                 override fun onMetadataChanged(metadata: MediaMetadata?) = publish()
+                override fun onAudioInfoChanged(info: MediaController.PlaybackInfo) {
+                    outputMixBlockedMutable.value = true
+                    publish()
+                }
             }
             controller.registerCallback(callback, workerHandler)
             controllerCallbacks[controller.sessionToken] = controller to callback
@@ -467,6 +517,49 @@ class IslandListenerService : NotificationListenerService() {
     }.getOrDefault(pkg).also { labelCache.put(pkg, it) }
 
     companion object {
+        private val privacyLock = Any()
+        private data class BadgeSource(val key: String, val packageName: String, val user: android.os.UserHandle)
+        private var badgeSources = emptyList<BadgeSource>()
+        private val badgeRevisionMutable = MutableStateFlow(0L)
+        val badgeRevision: StateFlow<Long> = badgeRevisionMutable.asStateFlow()
+
+        /** Counts retain no content, and hidden apps only become visible while their authenticated folder is open. */
+        fun badgeCounts(cleared: Set<String>): Map<String, Int> = synchronized(privacyLock) {
+            if (ScreenshotMode.on.value) emptyMap() else badgeSources
+                .filter { it.key !in cleared && AppSecurity.badgeVisible(it.packageName, it.user) }
+                .groupingBy { it.packageName }.eachCount()
+        }
+
+        fun profileBadgeCounts(cleared: Set<String>): Map<AppSecurityKey, Int> = synchronized(privacyLock) {
+            if (ScreenshotMode.on.value) emptyMap() else badgeSources
+                .filter { it.key !in cleared && AppSecurity.badgeVisible(it.packageName, it.user) }
+                .mapNotNull { AppSecurity.key(it.packageName, it.user) }
+                .groupingBy { it }.eachCount()
+        }
+
+        fun clearBadge(packageName: String, user: android.os.UserHandle? = null) {
+            synchronized(privacyLock) {
+                BadgeClears.cleared.value = BadgeClears.cleared.value + badgeSources
+                    .filter { it.packageName == packageName && (user == null || it.user == user) &&
+                        AppSecurity.badgeVisible(it.packageName, it.user) }.map { it.key }
+            }
+        }
+
+        /** Remove previously published content synchronously before any surface can render a new privacy state. */
+        fun refreshPrivacy() {
+            synchronized(privacyLock) {
+                outputMixBlockedMutable.value = true
+                mutable.value = mutable.value?.takeUnless { AppSecurity.isProtected(it.packageName) }
+                notificationsMutable.value = notificationsMutable.value.filterNot { AppSecurity.isProtected(it.packageName, it.user) }
+                messageChannelsMutable.value = messageChannelsMutable.value.filterValues { !AppSecurity.isProtected(it.packageName) }
+                val event = IslandEvents.latest.value?.first
+                if (event is IslandEvent.Message && AppSecurity.isProtected(event.packageName)) IslandEvents.dismiss()
+                artCache.snapshot().keys.filter { AppSecurity.isProtected(it.substringBefore('|')) }.forEach { artCache.remove(it) }
+                badgeRevisionMutable.value++
+            }
+            instance?.publish()
+        }
+
         /** An unchanged notification re-posted within this time stays in Notification Center without popping up again. */
         private const val REPEAT_QUIET_MS = 30 * 60_000L
         private val messageChannelsMutable = MutableStateFlow<Map<String, MessageChannel>>(emptyMap())
@@ -475,35 +568,53 @@ class IslandListenerService : NotificationListenerService() {
         private val notificationsMutable = MutableStateFlow<List<NotificationItem>>(emptyList())
         val notifications: StateFlow<List<NotificationItem>> = ScreenshotMode.hide(notificationsMutable.asStateFlow(), emptyList())
 
-        fun dismiss(key: String) { runCatching { instance?.cancelNotification(key) } }
+        fun dismiss(key: String) { if (visibleNotification(key) != null) runCatching { instance?.cancelNotification(key) } }
         private fun find(key: String) = runCatching { instance?.activeNotifications?.firstOrNull { it.key == key } }.getOrNull()
+        private fun visibleNotification(key: String) = find(key)?.takeUnless { AppSecurity.isProtected(it.packageName, it.user) }
         /** Answer, decline, hang up, mute or speaker through the call notification's own buttons. */
         internal fun callAction(context: Context, key: String, kind: CallControls.Kind): Boolean {
-            val intent = find(key)?.notification?.let { CallControls.intent(it, kind) } ?: return false
+            AppSecurity.initialize(context)
+            val intent = visibleNotification(key)?.notification?.let { CallControls.intent(it, kind) } ?: return false
             // Answering usually opens the in-call screen, so allow it to start from here.
             return sendAllowingLaunch(context, intent)
         }
         /** Quick reply through the app's own reply action; false if the notification or action is gone. */
-        fun reply(context: Context, key: String, text: String): Boolean =
-            find(key)?.notification?.let(Messaging::replyAction)?.let { Messaging.sendReply(context, it, text) } == true
-        fun markRead(key: String): Boolean = find(key)?.notification?.let(Messaging::markReadAction)?.let(Messaging::send) == true
+        fun reply(context: Context, key: String, text: String): Boolean {
+            AppSecurity.initialize(context)
+            return visibleNotification(key)?.notification?.let(Messaging::replyAction)?.let { Messaging.sendReply(context, it, text) } == true
+        }
+        fun markRead(key: String): Boolean = visibleNotification(key)?.notification?.let(Messaging::markReadAction)?.let(Messaging::send) == true
         /** Opens a notification by key (its own tap action, or the app). */
         fun openKey(context: Context, key: String, packageName: String) {
-            if (!sendAllowingLaunch(context, find(key)?.notification?.contentIntent))
-                context.packageManager.getLaunchIntentForPackage(packageName)
-                    ?.let { runCatching { context.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }
+            val notification = find(key)
+            val owner = notification?.packageName ?: packageName
+            AppSecurity.run(context, owner, notification?.user) {
+                if (!sendAllowingLaunch(context, notification?.notification?.contentIntent))
+                    context.packageManager.getLaunchIntentForPackage(owner)
+                        ?.let { runCatching { context.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }
+            }
         }
-        fun dismissAll() { runCatching { instance?.cancelAllNotifications() } }
+        fun dismissAll() {
+            runCatching { instance?.activeNotifications?.filter {
+                it.isClearable && !AppSecurity.isProtected(it.packageName, it.user)
+            }?.forEach { instance?.cancelNotification(it.key) } }
+        }
         /** Hides a notification for a while; Android brings it back afterwards. */
-        fun snooze(key: String, millis: Long) { runCatching { instance?.snoozeNotification(key, millis) } }
+        fun snooze(key: String, millis: Long) {
+            if (visibleNotification(key) != null) runCatching { instance?.snoozeNotification(key, millis) }
+        }
         fun openNotification(context: Context, item: NotificationItem) {
-            val sent = sendAllowingLaunch(context, item.contentIntent)
-            if (!sent) context.packageManager.getLaunchIntentForPackage(item.packageName)
-                ?.let { runCatching { context.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }
+            AppSecurity.run(context, item.packageName, item.user) {
+                val sent = sendAllowingLaunch(context, item.contentIntent)
+                if (!sent) context.packageManager.getLaunchIntentForPackage(item.packageName)
+                    ?.let { runCatching { context.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }
+            }
         }
         private val mutable = MutableStateFlow<IslandActivity?>(null)
         val activity: StateFlow<IslandActivity?> = ScreenshotMode.hide(mutable.asStateFlow(), null)
         val connected = MutableStateFlow(false)
+        private val outputMixBlockedMutable = MutableStateFlow(true)
+        internal val outputMixBlocked: StateFlow<Boolean> = outputMixBlockedMutable.asStateFlow()
         private const val PUBLISH_COALESCE_MS = 120L
         private val iconCache = android.util.LruCache<String, Bitmap>(64)
         private val artCache = android.util.LruCache<String, Bitmap>(8)
@@ -547,7 +658,6 @@ class IslandListenerService : NotificationListenerService() {
 
         /** Opens whatever the island is showing (the notification's own tap action, or the media app). */
         fun open(context: Context, activity: IslandActivity) {
-            val service = instance
             val key = when (activity) {
                 is IslandActivity.Progress -> activity.key
                 is IslandActivity.Call -> activity.key
@@ -555,12 +665,13 @@ class IslandListenerService : NotificationListenerService() {
                 is IslandActivity.Navigation -> activity.key
                 is IslandActivity.Media -> null
             }
-            val pending = key?.let { k ->
-                runCatching { service?.activeNotifications?.firstOrNull { it.key == k }?.notification?.contentIntent }.getOrNull()
-            } ?: (activity as? IslandActivity.Media)?.controller?.sessionActivity
-            val sent = sendAllowingLaunch(context, pending)
-            if (!sent) context.packageManager.getLaunchIntentForPackage(activity.packageName)
-                ?.let { runCatching { context.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }
+            val notification = key?.let(::find)
+            val pending = notification?.notification?.contentIntent ?: (activity as? IslandActivity.Media)?.controller?.sessionActivity
+            AppSecurity.run(context, notification?.packageName ?: activity.packageName, notification?.user) {
+                val sent = sendAllowingLaunch(context, pending)
+                if (!sent) context.packageManager.getLaunchIntentForPackage(activity.packageName)
+                    ?.let { runCatching { context.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }
+            }
         }
     }
 }

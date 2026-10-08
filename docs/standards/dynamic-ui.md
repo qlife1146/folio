@@ -128,7 +128,7 @@ Animation owner: HomeTiles dock row
 
 Good:
 
-- Sealed state for the island (`Island.kt:80`, `:116`, `CutoutIsland.kt:69`), exposed as `StateFlow`s.
+- Sealed state for live activities and brief events (`Island.kt`, `LiveActivityContent.kt`), exposed as `StateFlow`s.
 - `DeviceStatus` is callbacks only, registered on start and removed on stop (`DeviceStatus.kt:68-97`).
 - `Ticker` is one shared clock with `WhileSubscribed(0)`; install rings come from `PackageInstaller.SessionCallback`.
 - Jiggle is one shared infinite transition read in `graphicsLayer` (`Jiggle.kt:69-88`); dock magnification scales in

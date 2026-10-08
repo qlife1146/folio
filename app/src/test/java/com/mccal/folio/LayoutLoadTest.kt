@@ -72,7 +72,6 @@ class LayoutLoadTest {
         val state = decodeLauncherState("{}", legacyRaw = null)
         assertTrue(state.homeSlots.all { it == null })
         assertNull(state.error)
-        assertEquals(emptySet<String>(), state.installedTweaks)
     }
 }
 
