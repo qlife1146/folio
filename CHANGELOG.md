@@ -4,6 +4,16 @@ All notable changes to folio-duo, a personal fork of Folio. Versions follow [Sem
 (MAJOR.MINOR.PATCH), and this file follows [Keep a Changelog](https://keepachangelog.com). The app's
 `versionCode` is derived from the version name ((MAJOR × 10000 + MINOR × 100 + PATCH) × 10 + HOTFIX), so every release sorts correctly and a fix on top of one has nine numbers of its own.
 
+## [1.0.2] - 2026-10-09
+
+### Changed
+
+- **검색 결과:** Spotlight의 `상위 결과` 구역을 없애고, 첫 번째 앱도 다른 앱과 함께 표시합니다.
+
+### Fixed
+
+- **키보드와 검색 목록:** Spotlight와 앱 보관함의 검색 결과가 키보드에 가려지지 않도록 개선했습니다. 키보드를 닫으면 목록이 기존 화면 아래까지 확장됩니다.
+
 ## [1.0.1] - 2026-10-09
 
 ### Fixed

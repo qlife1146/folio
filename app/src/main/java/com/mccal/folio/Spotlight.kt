@@ -280,11 +280,8 @@ private fun SpotlightContent(state: LauncherState, active: Boolean, onClose: () 
                                     }
                                 }
                             }
-                            appHits.firstOrNull()?.let { top ->
-                                SpotlightSectionCard(stringResource(R.string.top_hit)) { TopHit(top, drag, onAppMenu) { launch(top) } }
-                            }
-                            if (appHits.size > 1) SpotlightSectionCard(stringResource(R.string.apps)) {
-                                AppGrid(appHits.drop(1).take(8), launch, drag, onAppMenu, "hits")
+                            if (appHits.isNotEmpty()) SpotlightSectionCard(stringResource(R.string.apps)) {
+                                AppGrid(appHits.take(9), launch, drag, onAppMenu, "hits")
                             }
                             if (shows(SpotlightSection.CONTACTS) && contacts.isNotEmpty()) {
                                 SpotlightSectionCard(stringResource(R.string.contacts)) { contacts.forEach { c ->
@@ -415,25 +412,6 @@ private fun AppGrid(apps: List<AppEntry>, onLaunch: (AppEntry) -> Unit, drag: Ho
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun TopHit(app: AppEntry, drag: HomeDragState, onAppMenu: (AppEntry) -> Unit, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(FolioRadius.CARD.dp))
-        .clickable(remember { MutableInteractionSource() }, null, onClick = onClick).padding(FolioSpace.SMALL.dp),
-        verticalAlignment = Alignment.CenterVertically) {
-        AppIcon(app, null, Modifier.size(56.dp)
-            .libraryAppInteraction(app, drag, null, "spotlight:top", scope = SPOTLIGHT_DRAG_SCOPE,
-                onLaunch = { onClick() }, onActions = onAppMenu)
-            .clip(RoundedCornerShape(FolioRadius.CARD.dp)))
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            Text(app.label, color = FolioGlass.ink, fontSize = FolioType.BODY.sp, fontWeight = FontWeight.SemiBold)
-            Text(if (app.profileLabel == stringResource(R.string.personal)) stringResource(R.string.application) else "${app.profileLabel} app", color = FolioGlass.ink.copy(alpha = .6f), fontSize = FolioType.FOOTNOTE.sp)
-        }
-        Text(stringResource(R.string.open), color = FolioGlass.ink, fontSize = FolioType.FOOTNOTE.sp, fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.clip(RoundedCornerShape(50)).background(FolioGlass.ink.copy(alpha = .18f)).padding(horizontal = FolioSpace.COMFY.dp, vertical = FolioSpace.SNUG.dp))
     }
 }
 
