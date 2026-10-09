@@ -251,11 +251,10 @@ private fun SpotlightContent(state: LauncherState, active: Boolean, onClose: () 
     val launch = { app: AppEntry -> onClose(); onLaunch(app) }
     val start = { intent: Intent -> onClose(); runCatching { AppSecurity.startActivity(context, intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }; Unit }
 
-    // imeAnimationTarget changes once per keyboard show/hide (not every animation frame), so results
-    // re-layout a single time instead of on each frame of the keyboard sliding in.
+    // Keep the result viewport and search field above the keyboard's current bounds.
     // Half folded, Spotlight moves off the hinge like iPhone Duo's system panels.
     FoldAvoidingBox(contentAlignment = Alignment.TopCenter) {
-    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.folioSafeTop).windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.imeAnimationTarget)).padding(horizontal = FolioSpace.LARGE.dp).padding(top = 18.dp, bottom = FolioSpace.SMALL.dp),
+    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.folioSafeTop).windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime)).padding(horizontal = FolioSpace.LARGE.dp).padding(top = 18.dp, bottom = FolioSpace.SMALL.dp),
         horizontalAlignment = Alignment.CenterHorizontally) {
         // A readable column on big screens (iPad Spotlight floats at about this width) rather than stretching edge to edge.
         Column(Modifier.widthIn(max = 680.dp).fillMaxSize().testTag("spotlight"),

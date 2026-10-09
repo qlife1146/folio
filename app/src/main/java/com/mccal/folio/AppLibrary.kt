@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.semantics.semantics
@@ -54,6 +55,7 @@ internal fun AppLibrary(
     homeRequests: Int = 0,
     active: Boolean = true,
     onOpenCategory: (LibraryCategory, List<AppEntry>) -> Unit = { _, _ -> },
+    bottomSpace: Dp = 0.dp,
 ) {
     val appOptionsLabel = stringResource(R.string.app_options)
     val glass = !editing
@@ -155,7 +157,9 @@ internal fun AppLibrary(
             Pinyin.heading(it.label)
         }
     }
-    LibraryForegroundContent(modifier, enabled = glass) { libraryModifier ->
+    // The keyboard replaces Home's bottom controls rather than adding another empty margin.
+    val imeBottom = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current)
+    LibraryForegroundContent(modifier.imePadding().padding(bottom = if (imeBottom > 0) 0.dp else bottomSpace), enabled = glass) { libraryModifier ->
     val panelShape = RoundedCornerShape(FolioRadius.PANEL.dp)
     Surface(libraryModifier.then(if (glass) Modifier.materialBackground(panelShape, tint = FolioGlass.panel) else Modifier)
         .onGloballyPositioned { if (glass) libraryForeground?.panelBounds = it.boundsInRoot() },

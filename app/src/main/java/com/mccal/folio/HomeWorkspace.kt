@@ -237,9 +237,9 @@ internal fun ExpandedWorkspace(
                         onActions = onLibraryActions, onOpenCategory = onOpenLibraryCategory,
                         modifier = Modifier.fillMaxSize()
                             .graphicsLayer { val b = libraryBack(); scaleX = 1f - .14f * b; scaleY = scaleX; alpha = 1f - .35f * b; translationX = size.width * .08f * b }
-                            .padding(start = FolioSpace.LARGE.dp, top = FolioSpace.LARGE.dp, bottom = bottomSpace)
+                            .padding(start = FolioSpace.LARGE.dp, top = FolioSpace.LARGE.dp)
                             .testTag("library-page"),
-                        drag = drag, page = visibleHomePages, onLaunchFrom = onLaunchFrom, onTurnOnWork = onTurnOnWork)
+                        bottomSpace = bottomSpace, drag = drag, page = visibleHomePages, onLaunchFrom = onLaunchFrom, onTurnOnWork = onTurnOnWork)
                 }
             }
         }

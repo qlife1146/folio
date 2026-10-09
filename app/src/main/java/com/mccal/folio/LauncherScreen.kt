@@ -1152,9 +1152,9 @@ internal fun LauncherScreen(
                                 // that one pushes the library back as Home returns, and the two stack rather than fight.
                                 .pageEffect(pageEffect, nativePager, physicalPage)
                                 .graphicsLayer { val b = libraryBack; scaleX = 1f - .14f * b; scaleY = scaleX; alpha = 1f - .35f * b; translationX = size.width * .08f * b }
-                                .padding(top = FolioSpace.LARGE.dp, bottom = bottomSpace)
+                                .padding(top = FolioSpace.LARGE.dp)
                                 .padding(libraryEdges(geometry.horizontalDock && !geometry.dockBesideRail && state.verticalStatus, preset.dockWidth, state.leftHanded)).testTag("library-page"),
-                            drag = drag, page = visibleHomePages, onLaunchFrom = onLaunchFrom, onTurnOnWork = { model.turnOnWork(it) })
+                            bottomSpace = bottomSpace, drag = drag, page = visibleHomePages, onLaunchFrom = onLaunchFrom, onTurnOnWork = { model.turnOnWork(it) })
                     } else {
                         // Centered beside the rail when the grid is narrower than the space (short, wide windows).
                         // Page Effects turn the page as it goes by, and only here, where one page fills the window.
