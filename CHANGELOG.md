@@ -1,10 +1,9 @@
 # Changelog
 
-All notable changes to folio-duo, a personal fork of Folio. Versions follow [Semantic Versioning](https://semver.org)
-(MAJOR.MINOR.PATCH), and this file follows [Keep a Changelog](https://keepachangelog.com). The app's
-`versionCode` is derived from the version name ((MAJOR × 10000 + MINOR × 100 + PATCH) × 10 + HOTFIX), so every release sorts correctly and a fix on top of one has nine numbers of its own.
+All notable changes to folio-duo, a personal fork of Folio. This file follows [Keep a Changelog](https://keepachangelog.com).
+The displayed version stays at `1.0.1`; Android's `versionCode` increases independently so later builds can update earlier installations.
 
-## [1.0.2] - 2026-10-09
+## [1.0.1] - 2026-10-09
 
 ### Changed
 
@@ -14,11 +13,7 @@ All notable changes to folio-duo, a personal fork of Folio. Versions follow [Sem
 
 - **키보드와 검색 목록:** Spotlight와 앱 보관함의 검색 결과가 키보드에 가려지지 않도록 개선했습니다. 키보드를 닫으면 목록이 기존 화면 아래까지 확장됩니다.
 
-## [1.0.1] - 2026-10-09
-
-### Fixed
-
-- **App search:** unrelated apps no longer match scattered letters in names or package names. Korean initials and alternate-language name search remain supported.
+- **앱 검색:** 검색어와 관계없는 앱이 결과에 나타나던 문제를 수정했습니다. 기존 한글 초성 검색과 다른 언어의 앱 이름 검색은 그대로 지원합니다.
 
 ## [1.0.0] - 2026-10-08
 
