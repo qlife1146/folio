@@ -527,7 +527,8 @@ private fun labelScore(text: String, words: List<String>, q: String): Int? = whe
     words.any { it.startsWith(q) } -> 2
     text.contains(q) -> 3
     words.joinToString("") { it.take(1) }.startsWith(q) -> 4
-    isSubsequence(q, text) -> 5 // fuzzy: letters in order ("spfy" → Spotify)
+    // Only Korean initials may skip letters; normal queries must match a name continuously.
+    q.all { it in '\u1100'..'\u115F' || it in '\uA960'..'\uA97C' } && isSubsequence(q, text) -> 5
     else -> null
 }
 

@@ -56,10 +56,6 @@ class SpotlightRankingTest {
         assertEquals(listOf("Maps", "Messages"), rankByLabel(listOf("Messages", "Maps"), "m") { it })
     }
 
-    @Test fun fuzzyLettersInOrderMatchLast() {
-        assertEquals("Samsung Notes", rankByLabel(labels, "smng") { it }.first())
-    }
-
     @Test fun frecencyBreaksTiesWithinATier() {
         val boosted = rankByLabel(listOf("Messages", "Maps"), "m", boost = { if (it == "Messages") 3.0 else 0.0 }) { it }
         assertEquals(listOf("Messages", "Maps"), boosted)
