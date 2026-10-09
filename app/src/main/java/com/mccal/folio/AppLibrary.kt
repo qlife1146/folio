@@ -158,8 +158,9 @@ internal fun AppLibrary(
         }
     }
     // The keyboard replaces Home's bottom controls rather than adding another empty margin.
-    val imeBottom = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current)
-    LibraryForegroundContent(modifier.imePadding().padding(bottom = if (imeBottom > 0) 0.dp else bottomSpace), enabled = glass) { libraryModifier ->
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val imeHeight = with(density) { WindowInsets.ime.getBottom(density).toDp() }
+    LibraryForegroundContent(modifier.imePadding().padding(bottom = (bottomSpace - imeHeight).coerceAtLeast(0.dp)), enabled = glass) { libraryModifier ->
     val panelShape = RoundedCornerShape(FolioRadius.PANEL.dp)
     Surface(libraryModifier.then(if (glass) Modifier.materialBackground(panelShape, tint = FolioGlass.panel) else Modifier)
         .onGloballyPositioned { if (glass) libraryForeground?.panelBounds = it.boundsInRoot() },
@@ -183,7 +184,6 @@ internal fun AppLibrary(
                         runCatching { WebSearchTarget.valueOf(state.searchEngine) }.getOrDefault(WebSearchTarget.GOOGLE), query)
                 })
             var libraryWidth by remember { mutableStateOf(360.dp) }
-            val density = androidx.compose.ui.platform.LocalDensity.current
             LazyColumn(Modifier.weight(1f).edgeFade(listState).onSizeChanged { libraryWidth = with(density) { it.width.toDp() } }.testTag("all-apps-list"), state = listState,
                 contentPadding = PaddingValues(bottom = 12.dp)) {
                 if (showWork && selectedProfile?.available == false) item("work-paused") {
