@@ -281,7 +281,7 @@ private fun SpotlightContent(state: LauncherState, active: Boolean, onClose: () 
                                 }
                             }
                             if (appHits.isNotEmpty()) SpotlightSectionCard(stringResource(R.string.apps)) {
-                                AppGrid(appHits.take(9), launch, drag, onAppMenu, "hits")
+                                AppGrid(appHits, launch, drag, onAppMenu, "hits")
                             }
                             if (shows(SpotlightSection.CONTACTS) && contacts.isNotEmpty()) {
                                 SpotlightSectionCard(stringResource(R.string.contacts)) { contacts.forEach { c ->
@@ -444,7 +444,7 @@ private fun SpotlightRoundAction(icon: ImageVector, label: String, onClick: () -
 
 /**
  * Prefix beats word-start beats substring beats initials ("gm" → Google Maps). An app you renamed is still
- * found by the names Android gives it in Korean and English, then by its package and pronunciation.
+ * found by the names Android gives it in Korean and English, then by pronunciation.
  */
 internal fun rankApps(apps: List<AppEntry>, query: String, frecency: Map<String, Double> = emptyMap()): List<AppEntry> {
     val boost: (AppEntry) -> Double = { frecency[it.id] ?: 0.0 }
@@ -456,9 +456,7 @@ internal fun rankApps(apps: List<AppEntry>, query: String, frecency: Map<String,
     val alternateNames = apps.filter { it.id !in namedIds }.flatMap { app -> app.searchLabels.map { app to it } }
     val alternateHits = rankByLabel(alternateNames, query, { boost(it.first) }) { it.second }
         .map { it.first }.distinctBy(AppEntry::id)
-    val alternateIds = alternateHits.mapTo(mutableSetOf(), AppEntry::id)
-    val packageHits = rankByLabel(apps.filter { !it.isShortcut && it.id !in namedIds && it.id !in alternateIds }, query, boost) { it.packageName }
-    val directHits = namedHits + alternateHits + packageHits
+    val directHits = namedHits + alternateHits
     val directIds = directHits.mapTo(mutableSetOf(), AppEntry::id)
     val pronunciationHits = apps.filter { it.id !in directIds }.mapNotNull { app ->
         val score = appSearchNames(app).mapNotNull { AppPronunciation.score(it, query) }.minOrNull()
@@ -468,7 +466,7 @@ internal fun rankApps(apps: List<AppEntry>, query: String, frecency: Map<String,
 }
 
 private fun appSearchNames(app: AppEntry): List<String> =
-    listOf(app.label, app.systemLabel) + app.searchLabels + listOfNotNull(app.packageName.takeUnless { app.isShortcut })
+    listOf(app.label, app.systemLabel) + app.searchLabels
 
 /** The App Library and folder picker use the same names and normalization as Spotlight. */
 internal fun matchesAppQuery(app: AppEntry, query: String): Boolean {
