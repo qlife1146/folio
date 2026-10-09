@@ -4,6 +4,12 @@ All notable changes to folio-duo, a personal fork of Folio. Versions follow [Sem
 (MAJOR.MINOR.PATCH), and this file follows [Keep a Changelog](https://keepachangelog.com). The app's
 `versionCode` is derived from the version name ((MAJOR × 10000 + MINOR × 100 + PATCH) × 10 + HOTFIX), so every release sorts correctly and a fix on top of one has nine numbers of its own.
 
+## [1.0.1] - 2026-10-09
+
+### Fixed
+
+- **App search:** unrelated apps no longer match scattered letters in names or package names. Korean initials and alternate-language name search remain supported.
+
 ## [1.0.0] - 2026-10-08
 
 ### Changed

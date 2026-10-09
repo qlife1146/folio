@@ -31,7 +31,7 @@ val releaseStoreFile = releaseSigningValues["FOLIO_RELEASE_STORE_FILE"]?.let { c
     }
 }
 
-val folioVersion = "1.0.0"
+val folioVersion = "1.0.1"
 
 /**
  * The profile is recorded from the "fast" build ("Folio Dev", debug-signed) because the release APK can't be
