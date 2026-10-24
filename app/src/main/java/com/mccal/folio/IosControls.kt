@@ -92,7 +92,8 @@ internal fun IosSlider(value: Float, onValueChange: (Float) -> Unit, valueRange:
 /** iOS search field: frosted rounded capsule, magnifier, placeholder and a clear button. */
 @Composable
 internal fun IosSearchField(query: String, onQuery: (String) -> Unit, placeholder: String, modifier: Modifier = Modifier,
-    fieldModifier: Modifier = Modifier, ink: Color? = null, material: Boolean = false, onSearch: (() -> Unit)? = null) {
+    fieldModifier: Modifier = Modifier, ink: Color? = null, material: Boolean = false, onSearch: (() -> Unit)? = null,
+    showClearButton: Boolean = true, imeAction: androidx.compose.ui.text.input.ImeAction = androidx.compose.ui.text.input.ImeAction.Search) {
     val contentInk = ink ?: if (material) FolioGlass.ink else Color.White
     val shape = RoundedCornerShape(if (material) 18.dp else 12.dp)
     // Measure the content height before the clear button fills it, rather than letting that button
@@ -107,13 +108,17 @@ internal fun IosSearchField(query: String, onQuery: (String) -> Unit, placeholde
             if (query.isEmpty()) androidx.compose.material3.Text(placeholder, color = contentInk.copy(alpha = .55f), fontSize = FolioType.BODY.sp, maxLines = 1)
             androidx.compose.foundation.text.BasicTextField(query, onQuery, fieldModifier.fillMaxWidth(), singleLine = true,
                 textStyle = TextStyle(color = contentInk, fontSize = FolioType.BODY.sp), cursorBrush = androidx.compose.ui.graphics.SolidColor(contentInk),
-                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
-                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { onSearch?.invoke() }))
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = imeAction),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { onSearch?.invoke() }, onDone = { onSearch?.invoke() }))
         }
         // Fill only the content-sized row; keep the wider touch target without changing its height (A11Y-1).
-        if (query.isNotEmpty()) Box(Modifier.width(FolioTouch.MIN.dp).fillMaxHeight().clip(androidx.compose.foundation.shape.CircleShape).clickable { onQuery("") },
+        if (showClearButton && query.isNotEmpty()) Box(Modifier.width(FolioTouch.MIN.dp).fillMaxHeight().clip(androidx.compose.foundation.shape.CircleShape).clickable {
+            onQuery("")
+        },
             contentAlignment = Alignment.Center) {
-            androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Rounded.Cancel, "Clear search", tint = contentInk.copy(alpha = .5f), modifier = Modifier.size(20.dp))
+            androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Rounded.Cancel,
+                "Clear search",
+                tint = contentInk.copy(alpha = .5f), modifier = Modifier.size(20.dp))
         }
     }
 }

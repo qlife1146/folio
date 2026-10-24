@@ -38,9 +38,10 @@ internal fun homeInkFor(setting: String, wallpaperPrefersDarkText: Boolean) = Ho
 internal fun WallpaperColors?.prefersDarkText(): Boolean =
     this != null && colorHints and WallpaperColors.HINT_SUPPORTS_DARK_TEXT != 0
 
-/** What Folio knows about the wallpaper behind Home, without reading its pixels. */
+/** System color hints, plus a local brightness map when Folio owns the wallpaper photo. */
 @Immutable
-internal data class WallpaperTone(val prefersDarkText: Boolean = false, val primary: Int? = null, val secondary: Int? = null)
+internal data class WallpaperTone(val prefersDarkText: Boolean = false, val primary: Int? = null,
+    val secondary: Int? = null, val luminance: WallpaperLuminanceMap? = null)
 
 internal val LocalWallpaperTone = staticCompositionLocalOf { WallpaperTone() }
 
@@ -69,7 +70,8 @@ internal fun rememberWallpaperTone(systemWallpaper: Boolean): WallpaperTone {
     val tone by produceState(WallpaperTone(), revision) {
         value = withContext(Dispatchers.Default) {
             val photo = loadLauncherBackground(context)?.takeUnless { it.isRecycled } ?: return@withContext WallpaperTone()
-            runCatching { WallpaperColors.fromBitmap(photo).tone() }.getOrDefault(WallpaperTone())
+            val colors = runCatching { WallpaperColors.fromBitmap(photo).tone() }.getOrDefault(WallpaperTone())
+            colors.copy(luminance = runCatching { WallpaperLuminanceMap.fromBitmap(photo) }.getOrNull())
         }
     }
     return tone

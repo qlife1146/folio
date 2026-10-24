@@ -31,9 +31,9 @@ val releaseStoreFile = releaseSigningValues["FOLIO_RELEASE_STORE_FILE"]?.let { c
     }
 }
 
-val folioVersion = "1.0.1"
-// Keep the displayed version fixed; increase this code for each distributed release.
-val folioVersionCode = 100021
+val folioVersion = "1.1.0"
+// Increase this code for each distributed release so Android accepts updates.
+val folioVersionCode = 101001
 
 /**
  * The profile is recorded from the "fast" build ("Folio Dev", debug-signed) because the release APK can't be

@@ -123,6 +123,10 @@ internal fun ExpandedWorkspace(
     insertionTarget: DropTarget?,
     libraryQuery: String,
     onLibraryQuery: (String) -> Unit,
+    librarySearchActive: Boolean,
+    onLibrarySearchActiveChange: (Boolean) -> Unit,
+    librarySearchIndexWidth: Dp,
+    libraryBrowseEndSpace: Dp,
     onLaunch: (AppEntry) -> Unit,
     onLaunchFrom: (AppEntry, android.graphics.Rect?) -> Unit,
     onPinned: (String, Boolean) -> Unit,
@@ -233,11 +237,14 @@ internal fun ExpandedWorkspace(
             key("library-pane") {
                 Box(Modifier.place((visibleHomePages - 1) * stride + viewportWidth).fillMaxSize()) {
                     AppLibrary(state, libraryQuery, onLibraryQuery, onLaunch, onPinned,
+                        searchActive = librarySearchActive, onSearchActiveChange = onLibrarySearchActiveChange,
+                        searchIndexWidth = librarySearchIndexWidth, browseEndSpace = libraryBrowseEndSpace,
                         active = nativePager.currentPage == libraryPhysicalPage || nativePager.targetPage == libraryPhysicalPage,
                         onActions = onLibraryActions, onOpenCategory = onOpenLibraryCategory,
                         modifier = Modifier.fillMaxSize()
                             .graphicsLayer { val b = libraryBack(); scaleX = 1f - .14f * b; scaleY = scaleX; alpha = 1f - .35f * b; translationX = size.width * .08f * b }
-                            .padding(start = FolioSpace.LARGE.dp, top = FolioSpace.LARGE.dp)
+                            .padding(start = FolioSpace.LARGE.dp, top = FolioSpace.LARGE.dp,
+                                end = if (librarySearchActive) FolioSpace.LARGE.dp else 0.dp)
                             .testTag("library-page"),
                         bottomSpace = bottomSpace, drag = drag, page = visibleHomePages, onLaunchFrom = onLaunchFrom, onTurnOnWork = onTurnOnWork)
                 }

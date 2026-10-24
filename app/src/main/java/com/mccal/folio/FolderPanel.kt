@@ -161,11 +161,11 @@ internal fun FolderPanel(
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
             .padding(horizontal = panelPadding, vertical = FolioSpace.SMALL.dp)) {
             val titleModifier = Modifier.fillMaxWidth().testTag("folder-name")
-            val titleStyle = androidx.compose.ui.text.TextStyle(color = FolioGlass.ink, fontSize = 30.sp,
+            val titleStyle = androidx.compose.ui.text.TextStyle(color = Color.Black, fontSize = 30.sp,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
             if (editing) androidx.compose.foundation.text.BasicTextField(title, { title = it },
                 titleModifier, singleLine = true, textStyle = titleStyle,
-                cursorBrush = androidx.compose.ui.graphics.SolidColor(FolioGlass.ink),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.Black),
                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done),
                 keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { if (title.isNotBlank()) onRename(title) }))
             else Text(folder.title, modifier = titleModifier, style = titleStyle)

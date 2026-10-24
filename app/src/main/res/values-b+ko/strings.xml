@@ -200,6 +200,8 @@
     <string name="your_widgets">나의 위젯</string>
     <string name="tap_to_choose">탭하여 선택</string>
     <string name="search_apps">앱 검색</string>
+    <string name="library_search_no_results">\'%1$s\'에 대한 결과 없음</string>
+    <string name="library_search_try_again">맞춤법을 확인하거나 새로운 검색을 시도하십시오.</string>
     <string name="leave_this_position_empty">이 위치를 비워 두기</string>
     <string name="no_apps_found">앱을 찾을 수 없음</string>
     <string name="size">크기</string>

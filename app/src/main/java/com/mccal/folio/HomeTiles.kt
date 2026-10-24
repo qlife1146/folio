@@ -267,7 +267,8 @@ internal fun FolderTile(folder: FolderEntry, apps: Map<String, AppEntry>, size: 
             }
             if (total > 0) IconBadge(total, look.badges, look.badgeColor.fixed?.let { Color(it) } ?: BadgeRed, look.badgeLook, look.badgeSize.scale)
         }
-        if (labels) Text(folder.title, color = FolioGlass.ink, fontSize = LocalLabelSize.current.sp.sp, maxLines = 1,
+        if (labels) WallpaperText(folder.title, fontSize = LocalLabelSize.current.sp.sp,
+            lineHeight = LocalLabelSize.current.lineSp.sp, maxLines = 1, textAlign = TextAlign.Center,
             overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = FolioSpace.TINY.dp))
     }
 }
@@ -316,11 +317,10 @@ internal fun AppTile(app: AppEntry, size: Float, labels: Boolean, modifier: Modi
                 if (onRemove != null) JiggleRemoveButton(stringResource(R.string.remove_from_home_2, app.label), onRemove = onRemove)
             }
         }
-        val ink = LocalHomeInk.current
         if (labels) Row(Modifier.padding(top = FolioSpace.TINY.dp), verticalAlignment = Alignment.CenterVertically) {
             NewAppDot(app.packageName)
-            Text(app.label, color = ink.primary, fontSize = LocalLabelSize.current.sp.sp, lineHeight = LocalLabelSize.current.lineSp.sp, maxLines = 1,
-                overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, style = TextStyle(shadow = ink.labelShadow))
+            WallpaperText(app.label, fontSize = LocalLabelSize.current.sp.sp, lineHeight = LocalLabelSize.current.lineSp.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
         }
     }
 }

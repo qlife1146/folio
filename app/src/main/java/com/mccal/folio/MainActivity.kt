@@ -58,6 +58,7 @@ class MainActivity : ComponentActivity() {
     private val settingsRequests = mutableIntStateOf(0)
     private val defaultHome = mutableStateOf(false)
     private val showFirstRun = mutableStateOf(false)
+    private val startupUpdate = mutableStateOf<AppUpdateResult.Available?>(null)
     private lateinit var setupExperience: SetupExperience
     private lateinit var status: DeviceStatusMonitor
     private lateinit var appearance: AppearanceStore
@@ -117,6 +118,10 @@ class MainActivity : ComponentActivity() {
         status = DeviceStatusMonitor(this).also { lifecycle.addObserver(it) }
         lifecycle.addObserver(IslandEvents.Observer(this))
         updateDefaultHome()
+        // Check once when Home is created, rather than whenever another app returns to Home.
+        lifecycleScope.launch {
+            startupUpdate.value = checkAppUpdate(applicationContext) as? AppUpdateResult.Available
+        }
         if (savedInstanceState == null && intent.getStringExtra("duo_destination") == "search") searchRequests.intValue++
         if (savedInstanceState == null && opensSettings(intent)) settingsRequests.intValue++
         intent.removeExtra("duo_destination")
@@ -320,6 +325,20 @@ class MainActivity : ComponentActivity() {
                     blocked = overlayOpen || showFirstRun.value, status = deviceStatus)
                 // Last, so the corners sit above everything in Home's window.
                 if (state.roundedCorners) RoundedScreenCorners(state.cornerRadius.dp)
+                if (!showFirstRun.value && unreported.value == null && (!safeMode.value || safeAcknowledged.value)) {
+                    startupUpdate.value?.let { update ->
+                        AlertDialog(onDismissRequest = { startupUpdate.value = null },
+                            title = { androidx.compose.material3.Text(stringResource(R.string.app_update_title)) },
+                            text = { androidx.compose.material3.Text(stringResource(R.string.app_update_available, update.version)) },
+                            confirmButton = { androidx.compose.material3.TextButton(onClick = {
+                                startupUpdate.value = null
+                                runCatching { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(update.url))) }
+                                    .onFailure { IslandEvents.notice(this@MainActivity, getString(R.string.app_update_open_failed)) }
+                            }) { androidx.compose.material3.Text(stringResource(R.string.app_update_download)) } },
+                            dismissButton = { androidx.compose.material3.TextButton(onClick = { startupUpdate.value = null }) {
+                                androidx.compose.material3.Text(stringResource(R.string.not_now)) } })
+                    }
+                }
             } } }
         }
         FoldRenderExperiment.attach(this)

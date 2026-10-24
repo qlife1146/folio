@@ -168,6 +168,7 @@ internal fun LauncherScreen(
     var savedPage by rememberSaveable { mutableIntStateOf(0) }
     var lastHomePage by rememberSaveable { mutableIntStateOf(0) }
     var libraryQuery by rememberSaveable { mutableStateOf("") }
+    var librarySearchActive by remember { mutableStateOf(false) }
     var menuDragSource by remember { mutableStateOf<DragRegion?>(null) }
     var menuIconAnchor by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     LaunchedEffect(overlays.menu) { if (overlays.menu == null) { menuDragSource = null; menuIconAnchor = null } }
@@ -208,6 +209,7 @@ internal fun LauncherScreen(
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             if (event == androidx.lifecycle.Lifecycle.Event.ON_PAUSE) {
                 libraryQuery = ""
+                librarySearchActive = false
                 collapseRailActivity()
             }
         }
@@ -221,6 +223,7 @@ internal fun LauncherScreen(
     }
     val haptic = LocalHapticFeedback.current
     val homeEdit = remember { HomeEditMode() }
+    var editingToday by remember { mutableStateOf(false) }
     homeEdit.onRemove = { target -> if (target is DropTarget.Widget) widgets.remove(target.index) else model.removePlacement(target) }
     // While a Focus hides Home pages, editing is locked; trying explains why instead.
     val focusLock = LocalFocusLock.current
@@ -228,6 +231,7 @@ internal fun LauncherScreen(
     LaunchedEffect(focusLock) { if (focusLock != null) homeEdit.stop() }
     // Long-press on empty Home starts jiggle mode (iPhone); a second long-press opens the Home options.
     val onEmptyLongPress: (Int) -> Unit = { index ->
+        editingToday = false
         if (focusLock != null) { haptic.perform(FolioHaptic.Refuse); lockNotice++ }
         else if (homeEdit.active) overlays.emptyCell = index
         else { haptic.perform(FolioHaptic.PickedUp); homeEdit.start() }
@@ -261,6 +265,7 @@ internal fun LauncherScreen(
         }
     }
     val libraryOpen = rememberHomePopupVisible(libraryVisible.value, onDismiss = {
+        libraryQuery = ""; librarySearchActive = false
         pager.requestScrollToPage(lastHomePage.coerceIn(0, homePages - 1))
     })
     LaunchedEffect(pager.currentPage) { collapseRailActivity() }
@@ -326,7 +331,10 @@ internal fun LauncherScreen(
     }
     val scope = rememberCoroutineScope()
     DisposableEffect(pager) {
-        val callback = { scope.launch { pager.animateScrollToPage(0) }; Unit }
+        val callback = {
+            libraryQuery = ""; librarySearchActive = false
+            scope.launch { pager.animateScrollToPage(0) }; Unit
+        }
         LiveDiscover.onHomeRequest = callback
         onDispose { if (LiveDiscover.onHomeRequest === callback) LiveDiscover.onHomeRequest = null }
     }
@@ -352,9 +360,18 @@ internal fun LauncherScreen(
     }
     LaunchedEffect(pager.settledPage) { if (pager.settledPage != homePages) focus.clearFocus() }
     LaunchedEffect(pager.settledPage, visibleHomePages, drag.active) {
-        if (!drag.active && pager.settledPage != visibleHomePages) libraryQuery = ""
+        if (pager.settledPage != visibleHomePages) {
+            librarySearchActive = false
+            if (!drag.active) libraryQuery = ""
+        }
     }
-    LaunchedEffect(pager.settledPage, visibleHomePages) { if (pager.settledPage !in 0 until visibleHomePages) homeEdit.stop() }
+    LaunchedEffect(pager.settledPage, visibleHomePages, todayMode) {
+        when {
+            pager.settledPage == -1 && todayMode -> editingToday = true
+            pager.settledPage in 0 until visibleHomePages -> editingToday = false
+            else -> homeEdit.stop()
+        }
+    }
     LaunchedEffect(state.showSystemStatusBar) { onStatusMode(!state.showSystemStatusBar) }
     LaunchedEffect(homeRequests) { if (homeRequests > 0) {
         // An app can pause Home after the destination is visible but before its settle completes.
@@ -364,7 +381,7 @@ internal fun LauncherScreen(
             ?: pager.currentPage.takeIf { it in 0 until homePages }
             ?: lastHomePage.coerceIn(0, homePages - 1)
         drag.clear(); widgetSession = null; resize.stop(); sheet = ""; picker.packageName = null
-        widgetPlacementMessage = null; overlays.dismissAll(); homeEdit.stop(); libraryQuery = ""
+        widgetPlacementMessage = null; overlays.dismissAll(); homeEdit.stop(); libraryQuery = ""; librarySearchActive = false
         collapseRailActivity()
         focus.clearFocus(); keyboard?.hide()
         // Apply popup disposal before starting the Home page transition.
@@ -413,10 +430,11 @@ internal fun LauncherScreen(
     // App Library, predictive back: the library eases back as you swipe and returns to Home when you let go.
     var libraryBack by remember { mutableFloatStateOf(0f) }
     val libraryBackActive = sheet.isEmpty() && !launcherActivity.spotlightVisible.value && launcherActivity.topPanel.value == null &&
-        pager.currentPage == visibleHomePages && !resize.active && !drag.active && overlays.menu == null && !homeEdit.active
+        pager.currentPage == visibleHomePages && !librarySearchActive && !resize.active && !drag.active && overlays.menu == null && !homeEdit.active
     PredictiveBack(enabled = libraryBackActive, onProgress = { libraryBack = it }, onCancel = { libraryBack = 0f },
         onBack = { focus.clearFocus(); scope.launch { pager.animateScrollToPage(0); libraryBack = 0f } })
-    BackHandler(enabled = sheet.isEmpty() && !launcherActivity.spotlightVisible.value && launcherActivity.topPanel.value == null && !libraryBackActive) { if (resize.active) resize.stop() else if (drag.active) {
+    BackHandler(enabled = sheet.isEmpty() && !launcherActivity.spotlightVisible.value && launcherActivity.topPanel.value == null && !libraryBackActive &&
+        (!librarySearchActive || resize.active || drag.active || overlays.menu != null || homeEdit.active)) { if (resize.active) resize.stop() else if (drag.active) {
         val destination = if (drag.source?.target is DropTarget.Library && drag.source?.scope != SPOTLIGHT_DRAG_SCOPE) homePages
             else drag.originPage.coerceIn(0, homePages - 1)
         drag.clear(); scope.launch { pager.scrollToPage(destination) }
@@ -656,7 +674,8 @@ internal fun LauncherScreen(
             page = pager.currentPage, eligiblePages = eligibleDragPages,
             sourceScope = if (spotlightOpen) SPOTLIGHT_DRAG_SCOPE else null,
             sourceOverride = menuDragSource.takeIf { overlays.menu != null },
-            immediate = overlays.menu != null || (!spotlightOpen && homeEdit.active && overlays.folder == null && libraryCategory == null),
+            // Only an open menu has already completed the hold; edit mode still waits.
+            immediate = overlays.menu != null,
             onStart = {
                 focus.clearFocus(); keyboard?.hide(); haptic.perform(FolioHaptic.PickedUp)
                 drag.source?.let { src ->
@@ -667,6 +686,7 @@ internal fun LauncherScreen(
             },
             onFinish = { cancelled -> finishDrag(cancelled) },
             onMoveStart = {
+                editingToday = false
                 if (drag.source?.scope == SPOTLIGHT_DRAG_SCOPE) launcherActivity.spotlightVisible.value = false
                 if (overlays.menu == drag.source?.appId) overlays.menu = null
                 if (focusLock == null && (drag.source?.appId != null || drag.source?.target is DropTarget.Widget)) homeEdit.start()
@@ -748,21 +768,23 @@ internal fun LauncherScreen(
         !drag.active && !homeEdit.active)
     val dismissLibrary by rememberUpdatedState<() -> Unit>({
         libraryQuery = ""; focus.clearFocus(); keyboard?.hide()
-        scope.launch { pager.animateScrollToPage((homePages - 1).coerceAtLeast(0)) }
+        if (librarySearchActive) librarySearchActive = false
+        else scope.launch { pager.animateScrollToPage((homePages - 1).coerceAtLeast(0)) }
     })
     val backgroundMaterial = LocalBackgroundMaterial.current
     val spotlightOpen = launcherActivity.spotlightVisible.value
     val reduceDockMotion = LocalReduceMotion.current
-    val dockHideReady by remember(spotlightOpen, reduceDockMotion, spotlightProgress) {
-        derivedStateOf { spotlightOpen && (reduceDockMotion || spotlightProgress() == 1f) }
+    val dockHideReady by remember(spotlightOpen, librarySearchActive, reduceDockMotion, spotlightProgress) {
+        derivedStateOf { librarySearchActive || (spotlightOpen && (reduceDockMotion || spotlightProgress() == 1f)) }
     }
     val spotlightDockProgress by rememberSettlingProgress(if (dockHideReady) 1f else 0f,
         if (reduceDockMotion) androidx.compose.animation.core.snap()
         else if (dockHideReady) androidx.compose.animation.core.tween(
             (800f / kotlin.math.sqrt(state.motionSpeed.factor)).roundToInt(),
+            delayMillis = if (librarySearchActive && !spotlightOpen) 220 else 0,
             easing = androidx.compose.animation.core.FastOutSlowInEasing)
         else MotionSpeed.spring(.86f, androidx.compose.animation.core.Spring.StiffnessMediumLow))
-    val dockHideProgress = { if (reduceDockMotion) { if (spotlightOpen) 1f else 0f }
+    val dockHideProgress = { if (reduceDockMotion) { if (spotlightOpen || librarySearchActive) 1f else 0f }
         else spotlightDockProgress.coerceIn(0f, 1f) }
     val backdropBlurPx = with(LocalDensity.current) { backgroundMaterial.blurRadiusDp.dp.toPx() }
     val homeLayer = rememberGraphicsLayer()
@@ -823,6 +845,7 @@ internal fun LauncherScreen(
             LocalLibraryForeground provides libraryForeground,
             LocalHomeBackgroundTap provides collapseRailActivity,
             LocalHomeInk provides homeInk, LocalDuoPalette provides palette,
+            LocalWallpaperDimAlpha provides if (state.dimWallpaperDark && appearance.dark) .3f else 0f,
             // Remembered so every icon isn't recomposed each time Home recomposes (a new lambda changes the local).
             LocalStackedApps provides state.iconStacks.keys,
             LocalIconStack provides remember(homeEdit.active, haptic) {
@@ -893,6 +916,8 @@ internal fun LauncherScreen(
                 foldAtCenter = hinge?.vertical == true, fillSpace = state.homeRows == 0)
             val todayContent: @Composable (Modifier) -> Unit = { pageModifier ->
                 TodayView(state, widgets, pageModifier,
+                    edit = homeEdit, onEditStart = { editingToday = true; homeEdit.start() },
+                    onGridSizing = { todayWidgetSizing = it },
                     active = todayMode && FolioForeground.visible.value &&
                         pager.currentPage == (if (expandedWorkspace && state.todayUnfolded == "BESIDE") 0 else -1) &&
                         sheet.isEmpty() && !launcherActivity.spotlightVisible.value && launcherActivity.topPanel.value == null &&
@@ -905,9 +930,7 @@ internal fun LauncherScreen(
                     },
                     topPadding = if (maxHeight > maxWidth && fitsRegularHomeLayout(maxWidth.value, maxHeight.value, classScale))
                         geometry.contentTop.dp else FolioSpace.MEDIUM.dp,
-                    searchTopInRoot = statusClockTop.takeIf { state.verticalStatus && state.statusStyle.showTime && !homeEdit.active },
-                    onSearch = { launcherActivity.openSpotlight() }, onLaunch = onLaunch,
-                    onAddWidget = { todayWidgetSizing = it; picker.toToday = true; picker.todayReplaceId = null; picker.anyApp(); sheet = "widgets" },
+                    contentTopInRoot = statusClockTop.takeIf { state.verticalStatus && state.statusStyle.showTime },
                     onReplaceWidget = { id, grid ->
                         todayWidgetSizing = grid; picker.toToday = true; picker.todayReplaceId = id; picker.anyApp()
                         picker.profileSerial = widgets.manager.getAppWidgetInfo(id)?.profile?.let {
@@ -983,6 +1006,11 @@ internal fun LauncherScreen(
             // A phone-sized screen keeps the status Side Bar beside Home even with the dock at the bottom.
             val pagerWidth = if (geometry.centeredPortrait || (geometry.horizontalDock && !geometry.dockBesideRail)) maxWidth
                 else maxWidth - preset.dockWidth.dp - 28.dp
+            val libraryStatusInCorner = geometry.horizontalDock && !geometry.dockBesideRail && state.verticalStatus
+            val libraryRailWidth = if (libraryStatusInCorner) (preset.dockWidth + 28f).dp else 0.dp
+            val librarySearchIndexWidth = if (pagerWidth < contentWidth || libraryStatusInCorner)
+                preset.dockWidth.dp.coerceAtLeast(52.dp) else 52.dp
+            val libraryBrowseEndSpace = (contentWidth - pagerWidth + libraryRailWidth - 16.dp).coerceAtLeast(0.dp)
             val leftColumnOrigin = (maxWidth / 2f - geometry.gridWidth.dp) / 2f - 16.dp
             val homeStride = panelWidth - leftColumnOrigin
             // The page controls under Home (and the Preview bar before Folio is the Home app), measured: the old guess
@@ -999,7 +1027,7 @@ internal fun LauncherScreen(
             var gestureOriginInRoot by remember { mutableStateOf(Offset.Zero) }
             var gestureOriginInWindow by remember { mutableStateOf(Offset.Zero) }
             var scrubberBounds by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
-            val pagerInputEnabled = pager.currentPage in -firstHome..visibleHomePages && !drag.active && !todayWidgetGesture &&
+            val pagerInputEnabled = pager.currentPage in -firstHome..visibleHomePages && !librarySearchActive && !drag.active && !todayWidgetGesture &&
                 widgetSession == null && !resize.active && sheet.isEmpty() && !showFirstRun && overlays.menu == null &&
                 overlays.folder == null && libraryCategory == null && overlays.emptyCell == null && overlays.newFolder == null &&
                 launcherActivity.backups.preview == null && !launcherActivity.backups.pickerPending &&
@@ -1071,7 +1099,7 @@ internal fun LauncherScreen(
                 onLeadingOverscroll = if (firstHome == 0 && discoverMode) onDiscover else null,
             )) {
             val pagerModifier = Modifier.align(if (state.leftHanded) Alignment.TopEnd else Alignment.TopStart)
-                .fillMaxHeight().width(pagerWidth)
+                .fillMaxHeight().width(if (librarySearchActive) contentWidth else pagerWidth)
                 .drawWithContent {
                     // The recorded Home layer only feeds Google Discover's frame; Today View and None draw directly.
                     if (!hostedDiscover) drawContent()
@@ -1111,6 +1139,9 @@ internal fun LauncherScreen(
                         previewWidgetPlacements = previewLayout.widgetPlacements, appsById = appsById,
                         widgets = widgets, drag = drag, target = target, insertionTarget = insertionTarget,
                         libraryQuery = libraryQuery, onLibraryQuery = { libraryQuery = it },
+                        librarySearchActive = librarySearchActive, onLibrarySearchActiveChange = { librarySearchActive = it },
+                        librarySearchIndexWidth = librarySearchIndexWidth,
+                        libraryBrowseEndSpace = (contentWidth - pagerWidth - FolioSpace.LARGE.dp).coerceAtLeast(0.dp),
                         onLaunch = onLaunch, onLaunchFrom = onLaunchFrom, onPinned = model::setPinned,
                         onTurnOnWork = { model.turnOnWork(it) },
                         onActions = { overlays.openAppMenu(it.id, fromHome = true) },
@@ -1133,7 +1164,7 @@ internal fun LauncherScreen(
                     // Discover is two physical positions before Home 2. Retain both Home
                     // neighbors to avoid reinflating Home 2's RemoteViews during native exit.
                     beyondViewportPageCount = if (firstHome > 0) 2 else 1,
-                    userScrollEnabled = !drag.active && !resize.active && !todayWidgetGesture, flingBehavior = pageFling,
+                    userScrollEnabled = !librarySearchActive && !drag.active && !resize.active && !todayWidgetGesture, flingBehavior = pageFling,
                     key = { if (it < firstHome) "discover" else if (it - firstHome == visibleHomePages) "library" else "home-${it - firstHome}" }) { physicalPage ->
                     val page = physicalPage - firstHome
                     if (page == -1) {
@@ -1143,6 +1174,8 @@ internal fun LauncherScreen(
                     } else if (page == visibleHomePages) {
                         AppLibrary(state, libraryQuery, { libraryQuery = it }, onLaunch, model::setPinned,
                             homeRequests = homeRequests,
+                            searchActive = librarySearchActive, onSearchActiveChange = { librarySearchActive = it },
+                            searchIndexWidth = librarySearchIndexWidth, browseEndSpace = libraryBrowseEndSpace,
                             onOpenCategory = { category, apps -> libraryCategory = category to apps },
                             active = nativePager.currentPage == physicalPage || nativePager.targetPage == physicalPage,
                             // Unfolded portrait: the Side Bar's status capsule sits in the top corner, so the library keeps
@@ -1153,7 +1186,8 @@ internal fun LauncherScreen(
                                 .pageEffect(pageEffect, nativePager, physicalPage)
                                 .graphicsLayer { val b = libraryBack; scaleX = 1f - .14f * b; scaleY = scaleX; alpha = 1f - .35f * b; translationX = size.width * .08f * b }
                                 .padding(top = FolioSpace.LARGE.dp)
-                                .padding(libraryEdges(geometry.horizontalDock && !geometry.dockBesideRail && state.verticalStatus, preset.dockWidth, state.leftHanded)).testTag("library-page"),
+                                .padding(if (librarySearchActive) PaddingValues(horizontal = 16.dp)
+                                    else libraryEdges(libraryStatusInCorner, preset.dockWidth, state.leftHanded)).testTag("library-page"),
                             bottomSpace = bottomSpace, drag = drag, page = visibleHomePages, onLaunchFrom = onLaunchFrom, onTurnOnWork = { model.turnOnWork(it) })
                     } else {
                         // Centered beside the rail when the grid is narrower than the space (short, wide windows).
@@ -1346,7 +1380,7 @@ internal fun LauncherScreen(
                         Icon(Icons.Rounded.Check, stringResource(R.string.done), tint = FolioGlass.ink, modifier = Modifier.size(24.dp))
                     }
                     IconButton(onClick = {
-                        overlays.emptyCell = homeCellIndex(pager.currentPage.coerceIn(0, homePages - 1), 0)
+                        overlays.emptyCell = homeCellIndex(if (editingToday) -1 else pager.currentPage.coerceIn(0, homePages - 1), 0)
                     }, modifier = Modifier.size(48.dp).materialBackground(CircleShape, tint = FolioGlass.panel)
                         .onGloballyPositioned { editPillBounds = it.boundsInWindow().roundToIntRect() }
                         .testTag("home-edit-brush")) {
@@ -1550,7 +1584,7 @@ internal fun LauncherScreen(
                                     WidgetSpan(special.spanX, special.spanY), Offset.Zero,
                                     dragging = false, candidate = special)
                                 widgetPlacementMessage = null
-                                scope.launch { pager.scrollToPage(special.page.coerceAtLeast(0).coerceAtMost(homePages - 1)) }
+                                pager.requestScrollToPage(special.page.coerceAtLeast(0).coerceAtMost(homePages - 1))
                                 return@let
                             }
                             val requestedIndex = existing?.let { homeCellIndex(it.page, it.row * GRID_COLUMNS + it.column) }
@@ -1568,7 +1602,9 @@ internal fun LauncherScreen(
                                 dragging = false, targetIndex = targetIndex)
                             widgetPlacementMessage = if (freeIndex == null)
                                 launcherActivity.getString(R.string.there_isn_t_room_for_this_size_choose_an) else null
-                            scope.launch { pager.scrollToPage(homeCellPage(targetIndex).coerceIn(0, homePages)) }
+                            // A new preview page takes the old library index. Request its position on the
+                            // next measure so Pager does not follow the retained "library" key instead.
+                            pager.requestScrollToPage(homeCellPage(targetIndex).coerceIn(0, homePages))
                         }
                     },
                     onBuiltin = builtin@{ builtinId ->
@@ -1593,7 +1629,7 @@ internal fun LauncherScreen(
                             widgetSession = WidgetPickerSession(null, picker.slot, span, Offset.Zero,
                                 dragging = false, candidate = special, builtinId = builtinId)
                             widgetPlacementMessage = null
-                            scope.launch { pager.scrollToPage(special.page.coerceAtLeast(0).coerceAtMost(homePages - 1)) }
+                            pager.requestScrollToPage(special.page.coerceAtLeast(0).coerceAtMost(homePages - 1))
                             return@builtin
                         }
                         val requested = existing?.let {
@@ -1612,13 +1648,13 @@ internal fun LauncherScreen(
                             dragging = false, targetIndex = free ?: requested, builtinId = builtinId)
                         widgetPlacementMessage = if (free == null)
                             launcherActivity.getString(R.string.there_isn_t_room_for_this_card_choose_an) else null
-                        scope.launch { pager.scrollToPage(homeCellPage(free ?: requested).coerceIn(0, homePages)) }
+                        pager.requestScrollToPage(homeCellPage(free ?: requested).coerceIn(0, homePages))
                     },
                     onDragStart = { provider, point ->
                         if (picker.stackSlot == null && !picker.toToday) footprint(provider)?.let { span ->
                             widgetSession = WidgetPickerSession(provider, picker.slot, span, point, dragging = true)
                             widgetPlacementMessage = null
-                            scope.launch { pager.scrollToPage(lastHomePage.coerceIn(0, homePages - 1)) }
+                            pager.requestScrollToPage(lastHomePage.coerceIn(0, homePages - 1))
                         }
                     },
                     onDrag = { point -> widgetSession = widgetSession?.copy(pointer = point) },
@@ -1870,7 +1906,7 @@ internal fun LauncherScreen(
                     (drag.pointer.y - drag.rootOrigin.y - 52.dp.toPx()).roundToInt()) }.size(84.dp)
                     .shadow(16.dp, RoundedCornerShape(FolioRadius.GROUPED_CARD.dp)).testTag("folder-drag-ghost"),
                     color = Glass.copy(alpha = .96f), shape = RoundedCornerShape(FolioRadius.GROUPED_CARD.dp)) {
-                    Box(contentAlignment = Alignment.Center) { Text(folder.title, color = Ink, textAlign = TextAlign.Center) }
+                    Box(contentAlignment = Alignment.Center) { Text(folder.title, color = Color.White, textAlign = TextAlign.Center) }
                 }
             }
             drag.source?.takeIf { it.widgetId != null }?.let { source ->
@@ -1900,20 +1936,6 @@ internal fun LauncherScreen(
             ) {
                 Text(stringResource(R.string.dock_full_move_an_app_out_first),
                     Modifier.padding(horizontal = FolioSpace.LARGE.dp, vertical = FolioSpace.MEDIUM.dp), color = Ink, fontSize = FolioType.FOOTNOTE.sp)
-            }
-            if (drag.moved && drag.source?.target !is DropTarget.Library &&
-                drag.source?.appId?.let(::isFolderId) != true) Surface(
-                // Keep removal in the right-side control area that is vacated during a drag.
-                // A centered target overlaps the expanded workspace's right-hand first cell.
-                Modifier.align(railBottom(state.leftHanded)).navigationBarsPadding().railEdge(state.leftHanded, 12.dp).padding(bottom = FolioSpace.MEDIUM.dp)
-                    .width((if (expandedWorkspace) state.expanded else state.compact).dockWidth.dp).height(64.dp)
-                    .dropRegion(drag, DropTarget.Remove).testTag("remove-drop-target"),
-                color = if (target == DropTarget.Remove) Color(0xFFB33B3B) else Glass.copy(alpha = .96f), shape = RoundedCornerShape(FolioRadius.PANEL.dp)) {
-                Column(Modifier.fillMaxSize().padding(vertical = FolioSpace.SNUG.dp), verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Rounded.DeleteOutline, null)
-                    Text(stringResource(R.string.remove), fontSize = 11.sp, maxLines = 1)
-                }
             }
         }
         resize.slot?.let { slot ->
@@ -1974,13 +1996,19 @@ internal fun LauncherScreen(
         overlays.emptyCell?.let { index ->
             HomeEditMenu(anchor = editPillBounds.takeIf { homeEdit.active }, onDismiss = { overlays.emptyCell = null },
                 onWidgets = {
-                    picker.targetIndex = homeCellIndex(homeCellPage(index), 0)
-                    picker.slot = model.nextWidgetSlot(); picker.anyApp(); picker.profileSerial = null
+                    picker.toToday = editingToday; picker.todayReplaceId = null
+                    if (!editingToday) {
+                        picker.targetIndex = homeCellIndex(homeCellPage(index), 0)
+                        picker.slot = model.nextWidgetSlot()
+                    }
+                    picker.anyApp(); picker.profileSerial = null
                     sheet = "widgets"
                 }, onWallpaper = { sheet = "settings:wallpaper" },
                 onCustomize = { sheet = "settings" },
-                onAddPage = { val page = model.addPage(); if (page >= 0) scope.launch { pager.animateScrollToPage(page) } },
-                onRemovePage = if (homeCellPage(index) == homePages - 1 && homePages > 1 && state.layout.contentPageCount < homePages) {{
+                onAddPage = if (editingToday) null else {{
+                    val page = model.addPage(); if (page >= 0) scope.launch { pager.animateScrollToPage(page) }
+                }},
+                onRemovePage = if (!editingToday && homeCellPage(index) == homePages - 1 && homePages > 1 && state.layout.contentPageCount < homePages) {{
                     if (model.removeLastEmptyPage()) scope.launch { pager.animateScrollToPage(homePages - 2) }
                 }} else null)
         }

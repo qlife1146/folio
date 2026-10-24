@@ -200,6 +200,8 @@
     <string name="your_widgets">Your widgets</string>
     <string name="tap_to_choose">Tap to choose</string>
     <string name="search_apps">Search apps</string>
+    <string name="library_search_no_results">No Results for ‘%1$s’</string>
+    <string name="library_search_try_again">Check the spelling or try a new search.</string>
     <string name="leave_this_position_empty">Leave this position empty</string>
     <string name="no_apps_found">No apps found</string>
     <string name="size">Size</string>

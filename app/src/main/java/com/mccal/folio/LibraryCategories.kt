@@ -232,7 +232,7 @@ internal fun CategoryFolder(title: String, apps: List<AppEntry>, drag: HomeDragS
                 Column(Modifier.width(width).graphicsLayer {
                     alpha = appear.value; scaleX = .9f + .1f * appear.value; scaleY = scaleX
                 }) {
-                    Text(title, color = FolioGlass.ink, fontSize = 30.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    Text(title, color = Color.Black, fontSize = 30.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.fillMaxWidth().padding(bottom = FolioSpace.MEDIUM.dp)
                             .materialBackground(RoundedCornerShape(FolioRadius.GROUPED_CARD.dp), tint = FolioGlass.panel)
                             .pointerInput(Unit) { detectTapGestures() }

@@ -457,7 +457,8 @@ internal fun Bars(playing: Boolean, color: Color = IslandGreen, bands: State<Lis
             val wave = bands?.value?.getOrNull(i)?.coerceIn(0f, 1f) ?: if (position < 0f) .15f
                 else (kotlin.math.sin(position * 2 * Math.PI + i * 1.3).toFloat() + 1f) / 2f
             // Rounded stroke caps also need room inside the canvas at the tallest frame.
-            val h = (size.height - w).coerceAtLeast(0f) * (.3f + .7f * wave)
+            val level = if (bands != null) wave else .3f + .7f * wave
+            val h = (size.height - w).coerceAtLeast(0f) * level
             drawLine(color, Offset(w * (1 + i * 1.7f), size.height / 2 + h / 2), Offset(w * (1 + i * 1.7f), size.height / 2 - h / 2),
                 strokeWidth = w, cap = StrokeCap.Round)
         }

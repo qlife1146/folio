@@ -16,14 +16,11 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.delay
-import kotlin.math.ceil
-import kotlin.math.hypot
-import kotlin.math.ln
-import kotlin.math.pow
+import kotlin.math.sqrt
 
 private val IdleAudioBands = List(4) { .15f }
 
-/** Real output-mix spectrum; no microphone source or audio samples are recorded or saved. */
+/** Real output-mix waveform; no microphone source and no audio samples are retained or saved. */
 @Composable
 internal fun rememberAudioBands(media: IslandActivity.Media?, enabled: Boolean): State<List<Float>>? {
     val context = LocalContext.current.applicationContext
@@ -83,10 +80,11 @@ internal fun rememberAudioBands(media: IslandActivity.Media?, enabled: Boolean):
             val effect = Visualizer(0).also { visualizer = it }
             check(effect.setEnabled(false) == Visualizer.SUCCESS)
             check(effect.setCaptureSize(Visualizer.getCaptureSizeRange()[1]) == Visualizer.SUCCESS)
-            check(effect.setScalingMode(Visualizer.SCALING_MODE_NORMALIZED) == Visualizer.SUCCESS)
+            check(effect.setScalingMode(Visualizer.SCALING_MODE_AS_PLAYED) == Visualizer.SUCCESS)
+            val envelope = OutputWaveformEnvelope()
             val listener = object : Visualizer.OnDataCaptureListener {
-                override fun onWaveFormDataCapture(effect: Visualizer, waveform: ByteArray, samplingRate: Int) = Unit
-                override fun onFftDataCapture(effect: Visualizer, fft: ByteArray, samplingRate: Int) {
+                override fun onFftDataCapture(effect: Visualizer, fft: ByteArray, samplingRate: Int) = Unit
+                override fun onWaveFormDataCapture(effect: Visualizer, waveform: ByteArray, samplingRate: Int) {
                     if (generation.get() != request) return
                     if (!outputSafe()) {
                         stopCapture()
@@ -96,7 +94,7 @@ internal fun rememberAudioBands(media: IslandActivity.Media?, enabled: Boolean):
                         .getOrElse { stopCapture(); return }
                     if (!playing) return
                     receivedAt.set(SystemClock.elapsedRealtime())
-                    val measured = fftBands(fft, samplingRate / 1000f)
+                    val measured = envelope.measure(waveform)
                     handler.post {
                         if (generation.get() != request) return@post
                         if (!outputSafe()) { stopCapture(); return@post }
@@ -105,14 +103,14 @@ internal fun rememberAudioBands(media: IslandActivity.Media?, enabled: Boolean):
                         if (stillPlaying) {
                             bands.value = measured.mapIndexed { i, value ->
                                 val previous = bands.value[i]
-                                previous + (value - previous) * (if (value > previous) .55f else .2f)
+                                previous + (value - previous) * (if (value > previous) .8f else .4f)
                             }
                         }
                     }
                 }
             }
             receivedAt.set(SystemClock.elapsedRealtime())
-            check(effect.setDataCaptureListener(listener, minOf(20_000, Visualizer.getMaxCaptureRate()), false, true) == Visualizer.SUCCESS)
+            check(effect.setDataCaptureListener(listener, minOf(20_000, Visualizer.getMaxCaptureRate()), true, false) == Visualizer.SUCCESS)
             check(effect.setEnabled(true) == Visualizer.SUCCESS)
         }.onFailure {
             generation.compareAndSet(request, request + 1)
@@ -138,17 +136,27 @@ internal fun rememberAudioBands(media: IslandActivity.Media?, enabled: Boolean):
     return if (enabled) bands else null
 }
 
-private fun fftBands(fft: ByteArray, sampleRateHz: Float): List<Float> {
-    if (fft.size < 4 || sampleRateHz <= 0f) return IdleAudioBands
-    val binHz = sampleRateHz / fft.size
-    val low = maxOf(20f, binHz)
-    val high = minOf(16_000f, sampleRateHz / 2f)
-    if (high <= low) return IdleAudioBands
-    return List(4) { band ->
-        val first = ceil(low * (high / low).pow(band / 4f) / binHz).toInt().coerceAtLeast(1)
-        val last = (ceil(low * (high / low).pow((band + 1) / 4f) / binHz).toInt() - 1).coerceAtMost(fft.size / 2 - 1)
-        var peak = 0f
-        for (bin in first..last) peak = maxOf(peak, hypot(fft[2 * bin].toFloat(), fft[2 * bin + 1].toFloat()))
-        (ln(1f + peak) / ln(182f)).coerceIn(.15f, 1f)
+private class OutputWaveformEnvelope {
+    private var reference = .08f
+
+    fun measure(waveform: ByteArray): List<Float> {
+        if (waveform.size < 4) return IdleAudioBands
+        // Equal time windows avoid the fixed bass-to-treble slope of four FFT bands.
+        val rms = List(4) { band ->
+            val first = band * waveform.size / 4
+            val end = (band + 1) * waveform.size / 4
+            var energy = 0f
+            for (index in first until end) {
+                val sample = ((waveform[index].toInt() and 0xff) - 128) / 128f
+                energy += sample * sample
+            }
+            sqrt(energy / (end - first))
+        }
+        // Share gain across bars and let it decay slowly, preserving beats instead of
+        // normalizing each frame to the same height. Keep 8-bit silence/noise at idle.
+        reference = maxOf(.08f, reference * .98f, rms.maxOrNull()!! * 1.25f)
+        return rms.map { value ->
+            .15f + .85f * ((value - .01f) / (reference - .01f)).coerceIn(0f, 1f)
+        }
     }
 }

@@ -8,15 +8,12 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -34,7 +31,6 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -42,29 +38,25 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
 /**
- * Today View, the page left of Home: search, the date, app suggestions and Home-sized widget spans.
+ * Today View, the page left of Home: the date and Home-sized widget spans.
  */
 @Composable
 internal fun TodayView(state: LauncherState, widgets: WidgetController, modifier: Modifier = Modifier,
-    onSearch: () -> Unit, onLaunch: (AppEntry) -> Unit, onAddWidget: (WidgetGridSizing) -> Unit,
+    edit: HomeEditMode, onEditStart: () -> Unit, onGridSizing: (WidgetGridSizing) -> Unit,
     onReplaceWidget: (Int, WidgetGridSizing) -> Unit,
     onRemove: (Int) -> Unit, onMove: (Int, Int) -> Unit, onResize: (Int, WidgetSpan) -> Unit,
     active: Boolean = true, homeRequests: Int = 0, topPadding: Dp = FolioSpace.MEDIUM.dp,
-    searchTopInRoot: Float? = null,
+    contentTopInRoot: Float? = null,
     onWidgetGesture: (Boolean) -> Unit = {}) {
-    val context = LocalContext.current
-    val edit = remember { HomeEditMode() }
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     var selectedWidget by remember { mutableStateOf<Int?>(null) }
     val resize = rememberWidgetResize()
     var dragging by remember { mutableStateOf<TodayWidgetDrag?>(null) }
@@ -73,11 +65,11 @@ internal fun TodayView(state: LauncherState, widgets: WidgetController, modifier
     SideEffect { reportGesture(widgetHeld || resize.active) }
     DisposableEffect(Unit) { onDispose { reportGesture(false) } }
     LaunchedEffect(active, homeRequests) {
-        edit.stop(); selectedWidget = null; resize.stop(); dragging = null; widgetHeld = false
+        selectedWidget = null; resize.stop(); dragging = null; widgetHeld = false
         reportGesture(false)
     }
     LaunchedEffect(edit.active) { if (!edit.active) { resize.stop(); dragging = null } }
-    androidx.activity.compose.BackHandler(edit.active) { edit.stop() }
+    androidx.activity.compose.BackHandler(active && edit.active) { edit.stop() }
     androidx.activity.compose.BackHandler(resize.active) { resize.stop() }
     val tick by rememberMinuteTick()
     val today = remember(tick) { LocalDate.now() }
@@ -85,24 +77,23 @@ internal fun TodayView(state: LauncherState, widgets: WidgetController, modifier
     val dateFormatter = remember(locale) {
         DateTimeFormatter.ofPattern(android.text.format.DateFormat.getBestDateTimePattern(locale, "MMMMd"), locale)
     }
-    val apps = remember(state.apps, state.hiddenApps, state.appSecurity) {
-        state.apps.filter { it.id !in state.hiddenApps && !AppSecurity.isProtected(it, state.appSecurity) }
-    }
-    val suggestions by produceState(emptyList<AppEntry>(), apps) {
-        value = withContext(Dispatchers.IO) {
-            Suggestions.forNow(context, apps)
-        }
-    }
-
     var topInRoot by remember { mutableStateOf<Float?>(null) }
     ProvideJiggle(edit) {
-        BoxWithConstraints(modifier.testTag("today-view").onGloballyPositioned { topInRoot = it.positionInRoot().y }) {
+        BoxWithConstraints(modifier.testTag("today-view").onGloballyPositioned { topInRoot = it.positionInRoot().y }
+            .semantics { onLongClick { if (active) { onEditStart(); true } else false } }
+            .pointerInput(active) {
+                if (active) detectTapGestures(onLongPress = {
+                    haptic.perform(FolioHaptic.PickedUp)
+                    onEditStart()
+                })
+            }) {
             val wide = maxWidth > TODAY_TWO_COLUMN_MIN_WIDTH_DP.dp
             val columnsWidth = minOf(maxWidth - 32.dp, 390.dp)
             val gap = 14.dp
             val cell = (columnsWidth - gap * (GRID_COLUMNS - 1)) / GRID_COLUMNS
             val grid = remember(cell, gap) { WidgetGridSizing(GRID_COLUMNS, GRID_ROWS,
                 (cell + gap).value, (cell + gap).value, horizontalGapDp = gap.value, verticalGapDp = gap.value) }
+            SideEffect { onGridSizing(grid) }
             val resolvedWidgets = remember(state.todayWidgets, widgets, grid) {
                 state.todayWidgets.map { widget ->
                     // Old layouts stored only Small/Medium/Large. Recover the provider's actual footprint.
@@ -113,7 +104,7 @@ internal fun TodayView(state: LauncherState, widgets: WidgetController, modifier
                 }
             }
             val density = LocalDensity.current
-            val alignedTopPadding = searchTopInRoot?.let { clockTop ->
+            val alignedTopPadding = contentTopInRoot?.let { clockTop ->
                 topInRoot?.let { viewTop -> with(density) { (clockTop - viewTop).toDp().coerceAtLeast(0.dp) } }
             } ?: topPadding
             val pitch = with(density) { (cell + gap).toPx() }
@@ -140,25 +131,12 @@ internal fun TodayView(state: LauncherState, widgets: WidgetController, modifier
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState(), enabled = !widgetHeld && moving == null && !resize.active).padding(horizontal = FolioSpace.LARGE.dp).padding(top = alignedTopPadding, bottom = 96.dp), // clear of Home's page dots
                 horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(gap)) {
                 Column(Modifier.width(columnsWidth), verticalArrangement = Arrangement.spacedBy(gap)) {
-                    // Search capsule
-                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).materialBackground(RoundedCornerShape(18.dp), tint = FolioGlass.panel)
-                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null,
-                            onClickLabel = stringResource(R.string.search), onClick = onSearch)
-                        .heightIn(min = 52.dp).padding(start = FolioSpace.COMFY.dp, end = FolioSpace.TINY.dp),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Rounded.Search, null, tint = FolioGlass.ink.copy(alpha = .75f), modifier = Modifier.size(22.dp))
-                        Spacer(Modifier.width(10.dp))
-                        Text(stringResource(R.string.search), color = FolioGlass.ink.copy(alpha = .55f), fontSize = 18.sp)
-                    }
-                    Column(Modifier.padding(start = FolioSpace.TINY.dp, top = FolioSpace.SNUG.dp)) {
+                    Column(Modifier.padding(start = FolioSpace.TINY.dp)) {
                         Text(today.format(DateTimeFormatter.ofPattern("EEEE")).uppercase(), color = FolioColors.Red, fontSize = FolioType.FOOTNOTE.sp,
                             fontWeight = FontWeight.SemiBold, letterSpacing = .6.sp)
-                        Text(today.format(dateFormatter), color = LocalHomeInk.current.primary, fontSize = if (wide) 40.sp else 34.sp,
+                        WallpaperText(today.format(dateFormatter), fontSize = if (wide) 40.sp else 34.sp,
                             fontWeight = FontWeight.Bold)
                     }
-                    val visibleSuggestions = suggestions.filterNot { AppSecurity.isProtected(it, state.appSecurity) }
-                    if (visibleSuggestions.isNotEmpty()) TodaySuggestions(visibleSuggestions, 4, onLaunch, editing = edit.active)
-
                     val gridRows = placements.maxOfOrNull { it.row + it.span.height } ?: 0
                     if (gridRows > 0) Box(Modifier.fillMaxWidth().height((cell + gap) * gridRows - gap)
                         .onGloballyPositioned { gridOrigin = it.positionInRoot() }) {
@@ -176,7 +154,7 @@ internal fun TodayView(state: LauncherState, widgets: WidgetController, modifier
                                     onRemove = { onRemove(widget.id) },
                                     onEdit = { selectedWidget = widget.id },
                                     onDragStart = { point ->
-                                        edit.start()
+                                        onEditStart()
                                         dragging = TodayWidgetDrag(widget.id, Offset(placement.column * pitch, placement.row * pitch), point)
                                     },
                                     onDrag = { point -> dragging?.let { it.offset = point - it.pointerStart } },
@@ -222,17 +200,8 @@ internal fun TodayView(state: LauncherState, widgets: WidgetController, modifier
                                 onApply = { onResize(placement.widget.id, WidgetSpan(resize.width, resize.height)); resize.stop() })
                         }
                     }
-                    if (state.todayWidgets.isEmpty()) Text(stringResource(R.string.add_widgets_for_the_things_you_check_mos), color = LocalHomeInk.current.secondary,
-                        fontSize = FolioType.SUBHEAD.sp, modifier = Modifier.padding(FolioSpace.TINY.dp))
-
-                    // Edit / Add / Done, like the bottom of iOS's Today View
-                    Row(Modifier.fillMaxWidth().padding(top = FolioSpace.SNUG.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                        if (edit.active) {
-                            JigglePill(stringResource(R.string.add_widget_2), Icons.Rounded.Add, description = stringResource(R.string.add_widget)) { onAddWidget(grid) }
-                            Spacer(Modifier.width(12.dp))
-                            JigglePill(stringResource(R.string.done), emphasized = true) { edit.stop() }
-                        } else JigglePill(stringResource(R.string.edit)) { edit.start() }
-                    }
+                    if (state.todayWidgets.isEmpty()) WallpaperText(stringResource(R.string.add_widgets_for_the_things_you_check_mos),
+                        secondary = true, fontSize = FolioType.SUBHEAD.sp, modifier = Modifier.padding(FolioSpace.TINY.dp))
                 }
             }
             savedPlacements.firstOrNull { it.widget.id == selectedWidget }?.let { placement ->
@@ -247,7 +216,7 @@ internal fun TodayView(state: LauncherState, widgets: WidgetController, modifier
                         onConfigure = { selectedWidget = null; widgets.reconfigure(id) },
                         isValid = { w, h -> w in 1..GRID_COLUMNS && h in 1..GRID_ROWS },
                         onResize = { w, h -> onResize(id, WidgetSpan(w, h)) },
-                        onStartResize = { w, h -> edit.start(); resize.start(id, w, h, constraints); selectedWidget = null },
+                        onStartResize = { w, h -> onEditStart(); resize.start(id, w, h, constraints); selectedWidget = null },
                         onMoveToPage = { false }, homePages = 1, onReplace = {
                             selectedWidget = null; resize.stop(); dragging = null; widgetHeld = false
                             onReplaceWidget(id, grid)
@@ -275,29 +244,6 @@ internal fun todayPlacements(list: List<TodayWidget>): List<TodayPlacement> {
         val index = cursor++
         occupied += cells(index)
         TodayPlacement(widget, index % GRID_COLUMNS, index / GRID_COLUMNS, span)
-    }
-}
-
-@Composable
-private fun TodaySuggestions(apps: List<AppEntry>, columns: Int, onLaunch: (AppEntry) -> Unit, editing: Boolean = false) {
-    SpotlightSectionCard(stringResource(R.string.suggestions)) {
-        Row(Modifier.fillMaxWidth()) {
-            apps.take(columns).forEach { app ->
-                Column(Modifier.weight(1f).clip(RoundedCornerShape(FolioRadius.CARD.dp))
-                    .then(if (editing) Modifier else Modifier.clickable { onLaunch(app) }).padding(vertical = FolioSpace.SNUG.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally) {
-                    if (editing) Box(Modifier.size(52.dp).background(FolioGlass.ink.copy(alpha = .12f), RoundedCornerShape(13.dp)))
-                    else AppIcon(app, app.label, Modifier.size(52.dp), shape = RoundedCornerShape(13.dp), badge = false)
-                    Box(Modifier.fillMaxWidth().padding(top = FolioSpace.TINY.dp, start = FolioSpace.HAIR.dp, end = FolioSpace.HAIR.dp),
-                        contentAlignment = Alignment.Center) {
-                        Text(if (editing) " " else app.label, color = FolioGlass.ink, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        if (editing) Box(Modifier.width(32.dp).height(6.dp)
-                            .background(FolioGlass.ink.copy(alpha = .12f), RoundedCornerShape(3.dp)))
-                    }
-                }
-            }
-            repeat((columns - apps.size).coerceAtLeast(0)) { Spacer(Modifier.weight(1f)) }
-        }
     }
 }
 
@@ -332,17 +278,10 @@ private fun TodayWidgetTile(widget: TodayWidget, widgets: WidgetController, widt
                     var moved = false
                     var ownsGesture = false
                     try {
-                        if (edit.active) {
-                            // In edit mode the next movement belongs to this widget, including before slop.
-                            ownGesture(true); ownsGesture = true
-                            moved = awaitSlopOrLongPress(down) ?: return@awaitEachGesture
-                        } else {
-                            awaitWidgetLongPressOrCancellation(down) ?: return@awaitEachGesture
-                            ownGesture(true); ownsGesture = true
-                        }
+                        awaitWidgetLongPressOrCancellation(down) ?: return@awaitEachGesture
+                        ownGesture(true); ownsGesture = true
                         currentEvent.changes.forEach { it.consume() }
                         haptic.perform(FolioHaptic.PickedUp)
-                        if (moved) beginDrag(startPoint)
                         while (true) {
                             val event = awaitPointerEvent(PointerEventPass.Initial)
                             val change = event.changes.firstOrNull { it.id == down.id }
@@ -388,7 +327,7 @@ private fun TodayWidgetTile(widget: TodayWidget, widgets: WidgetController, widt
             }
             // A sibling above AndroidView intercepts touches before any RemoteViews action can run.
             if (edit.active) Box(Modifier.matchParentSize().clickable(
-                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                interactionSource = remember { MutableInteractionSource() },
                 indication = null, onClickLabel = editLabel, onClick = { if (enabled) openEditor() }))
         }
         if (edit.active && inputEnabled) {
